@@ -187,4 +187,20 @@ describe("SQL executor", () => {
 
     expect(rows).toEqual([{ email: "a@gmail.com" }, { email: "c@gmail.com" }]);
   });
+
+  test("fails when scans exceed configured row read limits", async () => {
+    const sql = new SQL(schema);
+
+    await expect(sql(ctx, "SELECT email FROM users", { maxRowsRead: 2 })).rejects.toThrow(
+      "scan of users buffered 3 rows",
+    );
+  });
+
+  test("fails when in-memory operators exceed configured buffer limits", async () => {
+    const sql = new SQL(schema, { maxRowsRead: 10 });
+
+    await expect(sql(ctx, "SELECT email FROM users ORDER BY email ASC", { maxRowsBuffered: 2 })).rejects.toThrow(
+      "ORDER BY buffered 3 rows",
+    );
+  });
 });

@@ -27,6 +27,8 @@ export type ScanArgs = {
 export type ExecuteOptions = {
   scanQuery?: unknown;
   pageSize?: number;
+  maxRowsRead?: number;
+  maxRowsBuffered?: number;
 };
 
 export type ConvexLikeContext = {
@@ -43,6 +45,9 @@ export type ConvexLikeContext = {
 export type DynamicIndexBuilder = {
   eq(fieldName: string, value: unknown): unknown;
 };
+
+const DEFAULT_MAX_ROWS_READ = 10_000;
+const DEFAULT_MAX_ROWS_BUFFERED = 10_000;
 
 type ExecutionState = {
   ctes: Map<string, Row[]>;
@@ -84,6 +89,7 @@ export class PlanExecutor {
         );
       case "subqueryScan": {
         const rows = await this.executePlan(ctx, node.plan, options, state);
+        assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "subquery relation");
         return rows.map((row) => qualifyRow(row, node.alias, state.outerRow));
       }
       case "filter":
@@ -100,10 +106,12 @@ export class PlanExecutor {
             projectRowAsync(row, node.projections, (query, outerRow) => this.executeSubquery(ctx, query, outerRow, options, state)),
           ),
         );
+        assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "projection");
         return node.distinct ? distinctRows(rows) : rows;
       }
       case "sort": {
         const rows = await this.executeNode(ctx, node.input, options, state);
+        assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "ORDER BY");
         const keyed = await Promise.all(
           rows.map(async (row) => ({
             row,
@@ -132,6 +140,7 @@ export class PlanExecutor {
           ...(await this.executeNode(ctx, node.left, options, state)),
           ...(await this.executeNode(ctx, node.right, options, state)),
         ];
+        assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "UNION");
         return node.all ? rows : distinctRows(rows);
       }
     }
@@ -145,6 +154,7 @@ export class PlanExecutor {
   ): Promise<Row[]> {
     const leftRows = await this.executeNode(ctx, node.left, options, state);
     const rightRows = await this.executeNode(ctx, node.right, options, state);
+    assertRowBudget(leftRows.length + rightRows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN inputs");
     const joined: Row[] = [];
     const matchedRight = new Set<number>();
 
@@ -154,18 +164,23 @@ export class PlanExecutor {
         const row = { ...left, ...right };
         if (!node.on || truthy(await this.evaluateExpression(ctx, node.on, row, options, state))) {
           joined.push(row);
+          assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
           matched = true;
           matchedRight.add(rightIndex);
         }
       }
       if (!matched && (node.joinType === "left" || node.joinType === "full")) {
         joined.push(left);
+        assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
       }
     }
 
     if (node.joinType === "right" || node.joinType === "full") {
       for (const [rightIndex, right] of rightRows.entries()) {
-        if (!matchedRight.has(rightIndex)) joined.push(right);
+        if (!matchedRight.has(rightIndex)) {
+          joined.push(right);
+          assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
+        }
       }
     }
 
@@ -182,6 +197,7 @@ export class PlanExecutor {
     state: ExecutionState,
   ): Promise<Row[]> {
     const rows = await this.executeNode(ctx, input, options, state);
+    assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "aggregate input");
     const groups = new Map<string, { keys: unknown[]; rows: Row[] }>();
 
     for (const row of rows) {
@@ -190,6 +206,7 @@ export class PlanExecutor {
       const group = groups.get(key);
       if (group) group.rows.push(row);
       else groups.set(key, { keys, rows: [row] });
+      assertRowBudget(groups.size, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "aggregate groups");
     }
 
     if (groups.size === 0 && groupBy.length === 0) {
@@ -220,10 +237,18 @@ export class PlanExecutor {
     options: ExecuteOptions,
     state: ExecutionState,
   ): Promise<Record<string, unknown>[]> {
-    if (state.ctes.has(tableName)) return state.ctes.get(tableName)!;
+    if (state.ctes.has(tableName)) {
+      const rows = state.ctes.get(tableName)!;
+      assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `CTE ${tableName}`);
+      return rows;
+    }
     const scan = options.scanQuery ? scanViaFunction(ctx, options.scanQuery) : undefined;
-    if (scan) return collectPages(scan, { tableName, index }, options.pageSize);
-    if (ctx.db) return scanViaDb(ctx, tableName, index);
+    if (scan) return collectPages(scan, { tableName, index }, options);
+    if (ctx.db) {
+      const rows = await scanViaDb(ctx, tableName, index);
+      assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${tableName}`);
+      return rows;
+    }
     throw new Error(
       `Cannot scan table "${tableName}" for alias "${alias}". Provide a query context or scanQuery function reference.`,
     );
@@ -296,17 +321,20 @@ function scanViaFunction(ctx: ConvexLikeContext, scanQuery: unknown): PageFetche
   return (args) => ctx.runQuery!(scanQuery, args);
 }
 
-async function collectPages(scan: PageFetcher, args: ScanArgs, pageSize = 256): Promise<Record<string, unknown>[]> {
+async function collectPages(scan: PageFetcher, args: ScanArgs, options: ExecuteOptions): Promise<Record<string, unknown>[]> {
   const rows: Record<string, unknown>[] = [];
   let cursor: string | null | undefined = args.cursor ?? null;
+  const pageSize = options.pageSize ?? 256;
 
   while (true) {
     const result = await scan({ ...args, cursor, numItems: pageSize });
     if (Array.isArray(result)) {
       rows.push(...result);
+      assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${args.tableName}`);
       return rows;
     }
     rows.push(...result.page);
+    assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${args.tableName}`);
     if (result.isDone || !result.continueCursor) return rows;
     cursor = result.continueCursor;
   }
@@ -328,4 +356,18 @@ async function scanViaDb(
   }
   if (!query.collect) throw new Error(`Convex query for table "${tableName}" does not support collect().`);
   return query.collect();
+}
+
+function assertRowBudget(
+  count: number,
+  configuredLimit: number | undefined,
+  defaultLimit: number,
+  operation: string,
+): void {
+  const limit = configuredLimit ?? defaultLimit;
+  if (count > limit) {
+    throw new Error(
+      `${operation} buffered ${count} rows, exceeding the configured limit of ${limit}. Add a selective predicate/index, lower page size, increase maxRowsBuffered/maxRowsRead, or run a future node spill executor for this plan.`,
+    );
+  }
 }

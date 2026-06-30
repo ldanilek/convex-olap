@@ -64,6 +64,35 @@ Execution is intentionally simple:
 4. Collect rows from Convex through a query context or an action scan query.
 5. Evaluate the remaining relational operators in memory.
 
+## Memory limits and large plans
+
+The default executor is in-memory. It does **not** spill unindexed joins, large
+sorts, or large aggregations to the filesystem. This keeps the package safe to
+import from normal Convex queries/actions, but it also means large OLAP plans must
+be bounded.
+
+To avoid silently running an action out of memory, the executor enforces row
+budgets:
+
+```ts
+const convexSQL = new SQL(schema, {
+  scanQuery: api.olap.scan,
+  pageSize: 256,
+  maxRowsRead: 10_000,
+  maxRowsBuffered: 10_000,
+});
+```
+
+- `maxRowsRead` limits rows collected from one table scan or CTE.
+- `maxRowsBuffered` limits rows buffered by in-memory operators such as joins,
+  grouping, projection, `UNION`, and `ORDER BY`.
+
+If a plan exceeds these limits, execution throws with the operator that exceeded
+the budget. Add a more selective predicate, add/use an index, split the report
+into smaller queries, or run the query in a future node-specific spill executor.
+Planner `pushdown` metadata helps you see which joins, groupings, and sorts line
+up with Convex indexes.
+
 ## Pass your Convex schema
 
 The main constructor expects the same schema object you export from
@@ -473,6 +502,7 @@ Unsupported features include:
   information is inspectable planner metadata
 - streaming output from the executor; current execution collects pages before
   evaluating relational operators
+- filesystem-backed spill execution for large joins, aggregations, or sorts
 - writing result files or persistent materialized views
 
 ## Testing in this repo
