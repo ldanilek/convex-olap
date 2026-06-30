@@ -22,10 +22,10 @@ const results = await convexSQL(
 ## Why this exists
 
 Convex queries are transactional and strongly consistent, but large OLAP-style
-queries often need to page through many documents, join multiple streams, or
-materialize intermediate results. In Convex, that orchestration belongs in
-actions that call queries in loops. This library gives you a SQL-shaped interface
-for that pattern while keeping the compiled plan visible and testable.
+queries often need to page through many documents or join multiple streams. In
+Convex, that orchestration belongs in actions that call queries in loops. This
+library gives you a SQL-shaped interface for that pattern while keeping the
+compiled plan visible and testable.
 
 The planner deliberately does **not** use table sizes, histograms, or runtime
 statistics. It only uses the schema and index metadata you provide.
@@ -229,42 +229,6 @@ Example scan metadata:
 }
 ```
 
-### 5. Materialize results from a node action
-
-Filesystem APIs are node-only, so materialization is exported from the
-`convex-olap/node` subpath. Import it only from files using Convex's Node.js
-runtime.
-
-```ts
-// convex/exportUsers.ts
-"use node";
-
-import { action } from "./_generated/server";
-import { api } from "./_generated/api";
-import { SQL } from "convex-olap";
-import { materializePlanToFile } from "convex-olap/node";
-import schema from "./schema";
-
-const convexSQL = new SQL(schema);
-
-export const exportActiveUsers = action({
-  args: {},
-  handler: async (ctx) => {
-    const plan = convexSQL.plan(`
-      SELECT email, status
-      FROM users
-      WHERE status = 'active'
-      ORDER BY email ASC
-    `);
-
-    return materializePlanToFile(ctx, plan, "/tmp/active-users.jsonl", {
-      scanQuery: api.olap.scan,
-      format: "jsonl",
-    });
-  },
-});
-```
-
 ## How the planner works
 
 Plans are pipelines of typed plan nodes.
@@ -299,7 +263,7 @@ A `QueryPlan` contains:
 - `executionMode`:
   - `singleQuery`: simple single-table plans
   - `actionLoop`: plans expected to page through data from an action
-  - `materialize`: plans likely to need materialized intermediate state
+  - `inMemory`: more complex plans evaluated by the in-memory executor
 - `warnings`: non-fatal planner warnings, such as missing schema metadata
 
 The current executor evaluates joins, grouping, sorting, and projection in
@@ -468,7 +432,6 @@ test("uses the status index", () => {
 
 - direct execution in Convex query contexts
 - action execution through `ctx.runQuery`
-- node-only filesystem materialization through `convex-olap/node`
 
 ### Planner behavior
 
@@ -502,8 +465,7 @@ Unsupported features include:
 - pushing joins, aggregates, or sorts into Convex indexes
 - streaming output from the executor; current execution collects pages before
   evaluating relational operators
-- automatic persistent materialization; use `convex-olap/node` from a node action
-  to write results to the filesystem
+- writing result files or persistent materialized views
 
 ## Testing in this repo
 
@@ -515,8 +477,7 @@ npm run test:local-backend
 npm run build
 ```
 
-`npm run test` runs fast parser, planner, executor, Convex-test, and node
-materialization tests.
+`npm run test` runs fast parser, planner, executor, and Convex-test coverage.
 
 `npm run test:local-backend` starts an anonymous Convex OSS backend on
 `http://127.0.0.1:3210`, deploys the `convex/` test app, and runs HTTP e2e tests

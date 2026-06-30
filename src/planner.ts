@@ -18,7 +18,7 @@ export type QueryPlan = {
   root: PlanNode;
   tables: PlannedTable[];
   aggregates: AggregatePlan[];
-  executionMode: "singleQuery" | "actionLoop" | "materialize";
+  executionMode: "singleQuery" | "actionLoop" | "inMemory";
   warnings: string[];
 };
 
@@ -182,7 +182,7 @@ export class SQLPlanner {
 function chooseExecutionMode(ast: SelectStatement, tables: PlannedTable[]): QueryPlan["executionMode"] {
   if (tables.length <= 1 && ast.orderBy.length === 0) return "singleQuery";
   if (tables.length <= 2 && !ast.distinct) return "actionLoop";
-  return "materialize";
+  return "inMemory";
 }
 
 function chooseIndex(
