@@ -100,7 +100,7 @@ console.log(plan.tables[0]?.index);
 Node actions can write materialized results to the filesystem:
 
 ```ts
-import { materializePlanToFile } from "convex-olap";
+import { materializePlanToFile } from "convex-olap/node";
 
 const plan = convexSQL.plan("SELECT * FROM users");
 await materializePlanToFile(ctx, plan, "/tmp/users.json", {

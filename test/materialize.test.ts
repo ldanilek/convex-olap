@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { materializePlanToFile, SQL, type ScanAdapter } from "../src/index.js";
+import { SQL, type ScanAdapter } from "../src/index.js";
+import { materializePlanToFile } from "../src/node.js";
 
 let tempDir: string | undefined;
 

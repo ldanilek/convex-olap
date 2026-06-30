@@ -68,8 +68,6 @@ export type {
 export { scanHandler } from "./convex.js";
 export type { ConvexScanContext } from "./convex.js";
 export type { ConvexLikeContext, ExecuteOptions, Row, ScanAdapter, ScanArgs, ScanPage } from "./executor.js";
-export { materializePlanToFile } from "./materialize.js";
-export type { MaterializeOptions } from "./materialize.js";
 export type {
   AggregateNode,
   AggregatePlan,

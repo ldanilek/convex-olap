@@ -4,4 +4,6 @@ coverage/
 .env
 .env.local
 .convex/
+convex/_generated/
+convex/tsconfig.json
 npm-debug.log*

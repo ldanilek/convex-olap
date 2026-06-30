@@ -5,6 +5,7 @@ export default defineConfig({
     environment: "edge-runtime",
     globals: false,
     include: ["test/**/*.test.ts"],
+    exclude: ["test/local-backend/**"],
     coverage: {
       reporter: ["text", "lcov"],
       include: ["src/**/*.ts"],
