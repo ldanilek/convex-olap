@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { SQL, type ScanFunction } from "../src/index.js";
+import { SQL } from "../src/index.js";
 
 const schema = {
   tables: {
@@ -40,26 +40,47 @@ const data: Record<string, Record<string, unknown>[]> = {
   ],
 };
 
-const scan: ScanFunction = async ({ tableName, index }) => {
-  const rows = data[tableName] ?? [];
-  if (!index) return rows;
-  return rows.filter((row) =>
-    Object.entries(index.equalities).every(([field, expected]) => row[field] === expected),
-  );
+const ctx = {
+  db: {
+    query(tableName: string) {
+      return {
+        withIndex(_indexName: string, callback?: (q: any) => unknown) {
+          const equalities: Record<string, unknown> = {};
+          const builder = {
+            eq(field: string, value: unknown) {
+              equalities[field] = value;
+              return builder;
+            },
+          };
+          callback?.(builder);
+          return {
+            async collect() {
+              return (data[tableName] ?? []).filter((row) =>
+                Object.entries(equalities).every(([field, expected]) => row[field] === expected),
+              );
+            },
+          };
+        },
+        async collect() {
+          return data[tableName] ?? [];
+        },
+      };
+    },
+  },
 };
 
 describe("SQL executor", () => {
   test("executes count with like predicate", async () => {
-    const sql = new SQL(schema, { scan });
-    const rows = await sql({}, "SELECT COUNT(*) AS count FROM users WHERE email LIKE '%@gmail.com'");
+    const sql = new SQL(schema);
+    const rows = await sql(ctx, "SELECT COUNT(*) AS count FROM users WHERE email LIKE '%@gmail.com'");
 
     expect(rows).toEqual([{ count: 2 }]);
   });
 
   test("executes group by with aggregate and having", async () => {
-    const sql = new SQL(schema, { scan });
+    const sql = new SQL(schema);
     const rows = await sql(
-      {},
+      ctx,
       `
         SELECT status, COUNT(*) AS count, AVG(age) AS avgAge
         FROM users
@@ -76,9 +97,9 @@ describe("SQL executor", () => {
   });
 
   test("executes joins and ordering", async () => {
-    const sql = new SQL(schema, { scan });
+    const sql = new SQL(schema);
     const rows = await sql(
-      {},
+      ctx,
       `
         SELECT u.email AS email, SUM(o.total) AS revenue
         FROM users u
@@ -95,22 +116,9 @@ describe("SQL executor", () => {
     ]);
   });
 
-  test("uses paginated custom scan functions", async () => {
-    const sql = new SQL(schema, {
-      scan: async ({ tableName, cursor, numItems }) => {
-        const start = cursor ? Number(cursor) : 0;
-        const end = start + (numItems ?? 1);
-        const page = (data[tableName] ?? []).slice(start, end);
-        return {
-          page,
-          isDone: end >= (data[tableName] ?? []).length,
-          continueCursor: String(end),
-        };
-      },
-      pageSize: 1,
-    });
-
-    const rows = await sql({}, "SELECT COUNT(*) AS count FROM users");
-    expect(rows).toEqual([{ count: 3 }]);
+  test("uses index metadata when the query context supports withIndex", async () => {
+    const sql = new SQL(schema);
+    const rows = await sql(ctx, "SELECT COUNT(*) AS count FROM users WHERE status = 'active'");
+    expect(rows).toEqual([{ count: 2 }]);
   });
 });

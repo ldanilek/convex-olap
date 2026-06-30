@@ -17,11 +17,7 @@ export type ScanArgs = {
   numItems?: number;
 };
 
-export type ScanFunction = (args: ScanArgs) => Promise<Record<string, unknown>[] | ScanPage>;
-export type ScanAdapter = ScanFunction;
-
 export type ExecuteOptions = {
-  scan?: ScanFunction;
   scanQuery?: unknown;
   pageSize?: number;
 };
@@ -162,11 +158,11 @@ export class PlanExecutor {
     index: IndexUse | undefined,
     options: ExecuteOptions,
   ): Promise<Record<string, unknown>[]> {
-    const scan = options.scan ?? (options.scanQuery ? scanViaFunction(ctx, options.scanQuery) : undefined);
+    const scan = options.scanQuery ? scanViaFunction(ctx, options.scanQuery) : undefined;
     if (scan) return collectPages(scan, { tableName, index }, options.pageSize);
     if (ctx.db) return scanViaDb(ctx, tableName, index);
     throw new Error(
-      `Cannot scan table "${tableName}" for alias "${alias}". Provide a query context, custom scan function, or scanQuery function reference.`,
+      `Cannot scan table "${tableName}" for alias "${alias}". Provide a query context or scanQuery function reference.`,
     );
   }
 }
@@ -192,12 +188,14 @@ function distinctRows(rows: Row[]): Row[] {
   return distinct;
 }
 
-function scanViaFunction(ctx: ConvexLikeContext, scanQuery: unknown): ScanFunction {
+type PageFetcher = (args: ScanArgs) => Promise<Record<string, unknown>[] | ScanPage>;
+
+function scanViaFunction(ctx: ConvexLikeContext, scanQuery: unknown): PageFetcher {
   if (!ctx.runQuery) throw new Error("scanQuery execution requires an action context with ctx.runQuery.");
   return (args) => ctx.runQuery!(scanQuery, args);
 }
 
-async function collectPages(scan: ScanFunction, args: ScanArgs, pageSize = 256): Promise<Record<string, unknown>[]> {
+async function collectPages(scan: PageFetcher, args: ScanArgs, pageSize = 256): Promise<Record<string, unknown>[]> {
   const rows: Record<string, unknown>[] = [];
   let cursor: string | null | undefined = args.cursor ?? null;
 

@@ -51,10 +51,8 @@ flowchart LR
   Executor --> Scan{How to scan?}
   Scan -->|Query ctx| DB[ctx.db.query]
   Scan -->|Action ctx| RunQuery[ctx.runQuery scan function]
-  Scan -->|Tests/tools| CustomScan[custom scan function]
   DB --> Rows[Rows]
   RunQuery --> Rows
-  CustomScan --> Rows
 ```
 
 Execution is intentionally simple:
@@ -63,8 +61,7 @@ Execution is intentionally simple:
 2. Compile the AST into a plan containing scan, filter, join, aggregate,
    project, sort, and limit nodes.
 3. Annotate scans with usable equality-prefix indexes from the supplied schema.
-4. Collect rows from Convex through a query context, action scan query, or
-   custom scan function.
+4. Collect rows from Convex through a query context or an action scan query.
 5. Evaluate the remaining relational operators in memory.
 
 ## Pass your Convex schema
@@ -202,54 +199,7 @@ const rows = await convexSQL(
 );
 ```
 
-### 4. Use a custom scan function in tests or scripts
-
-A custom scan function is just a function that receives `{ tableName, index,
-cursor, numItems }` and returns rows. It lets tests and standalone scripts use
-the same executor without starting Convex.
-
-```ts
-import { SQL, type ScanFunction } from "convex-olap";
-import schema from "../convex/schema";
-
-const data = {
-  users: [
-    { email: "a@gmail.com", status: "active" },
-    { email: "b@example.com", status: "inactive" },
-  ],
-};
-
-const scan: ScanFunction = async ({ tableName, index }) => {
-  const rows = data[tableName as keyof typeof data] ?? [];
-  if (!index) return rows;
-  return rows.filter((row) =>
-    Object.entries(index.equalities).every(
-      ([field, expected]) => row[field as keyof typeof row] === expected,
-    ),
-  );
-};
-
-const convexSQL = new SQL(schema, { scan });
-const rows = await convexSQL({}, "SELECT COUNT(*) AS count FROM users");
-```
-
-Custom scan functions may return all rows at once or paginated pages:
-
-```ts
-const scan: ScanFunction = async ({ tableName, cursor, numItems = 100 }) => {
-  const start = cursor ? Number(cursor) : 0;
-  const end = start + numItems;
-  const rows = data[tableName] ?? [];
-
-  return {
-    page: rows.slice(start, end),
-    isDone: end >= rows.length,
-    continueCursor: String(end),
-  };
-};
-```
-
-### 5. Inspect a plan before running it
+### 4. Inspect a plan before running it
 
 ```ts
 const plan = convexSQL.plan(`
@@ -279,7 +229,7 @@ Example scan metadata:
 }
 ```
 
-### 6. Materialize results from a node action
+### 5. Materialize results from a node action
 
 Filesystem APIs are node-only, so materialization is exported from the
 `convex-olap/node` subpath. Import it only from files using Convex's Node.js
@@ -518,8 +468,6 @@ test("uses the status index", () => {
 
 - direct execution in Convex query contexts
 - action execution through `ctx.runQuery`
-- custom scan functions
-- paginated scan functions
 - node-only filesystem materialization through `convex-olap/node`
 
 ### Planner behavior
@@ -567,8 +515,8 @@ npm run test:local-backend
 npm run build
 ```
 
-`npm run test` runs fast parser, planner, executor, Convex-test, custom scan
-function, and node materialization tests.
+`npm run test` runs fast parser, planner, executor, Convex-test, and node
+materialization tests.
 
 `npm run test:local-backend` starts an anonymous Convex OSS backend on
 `http://127.0.0.1:3210`, deploys the `convex/` test app, and runs HTTP e2e tests

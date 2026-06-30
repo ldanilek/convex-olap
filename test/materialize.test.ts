@@ -3,15 +3,25 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { SQL, type ScanFunction } from "../src/index.js";
+import { SQL } from "../src/index.js";
 import { materializePlanToFile } from "../src/node.js";
 
 let tempDir: string | undefined;
 
-const scan: ScanFunction = async () => [
-  { email: "a@gmail.com", status: "active" },
-  { email: "b@example.com", status: "inactive" },
-];
+const ctx = {
+  db: {
+    query() {
+      return {
+        async collect() {
+          return [
+            { email: "a@gmail.com", status: "active" },
+            { email: "b@example.com", status: "inactive" },
+          ];
+        },
+      };
+    },
+  },
+};
 
 describe("materializePlanToFile", () => {
   afterEach(async () => {
@@ -31,7 +41,7 @@ describe("materializePlanToFile", () => {
     const plan = sql.plan("SELECT email FROM users WHERE status = 'active'");
     const filePath = join(tempDir, "users.jsonl");
 
-    const result = await materializePlanToFile({}, plan, filePath, { scan, format: "jsonl" });
+    const result = await materializePlanToFile(ctx, plan, filePath, { format: "jsonl" });
 
     expect(result.rows).toBe(1);
     expect(await readFile(filePath, "utf8")).toBe('{"email":"a@gmail.com"}\n');

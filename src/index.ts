@@ -67,7 +67,7 @@ export type {
 } from "./ast.js";
 export { scanHandler, scanQuery } from "./convex.js";
 export type { ConvexScanContext } from "./convex.js";
-export type { ConvexLikeContext, ExecuteOptions, Row, ScanAdapter, ScanArgs, ScanFunction, ScanPage } from "./executor.js";
+export type { ConvexLikeContext, ExecuteOptions, Row, ScanArgs, ScanPage } from "./executor.js";
 export type {
   AggregateNode,
   AggregatePlan,
