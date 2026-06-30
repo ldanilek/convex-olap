@@ -419,7 +419,7 @@ class DiskStore {
         import(/* @vite-ignore */ "node:path"),
       ]);
       const dir = path.join(os.tmpdir(), `convex-olap-${randomId()}`);
-      const store = new DiskStore(dir, fs, path);
+      const store = new DiskStore(dir, fs as any, path);
       await store.fs.mkdir(dir, { recursive: true });
       return store;
     } catch (error) {
