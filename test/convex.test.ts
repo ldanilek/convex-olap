@@ -1,0 +1,72 @@
+/// <reference types="vite/client" />
+import { convexTest } from "convex-test";
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+import { describe, expect, test } from "vitest";
+import { SQL, scanHandler, type ConvexLikeContext } from "../src/index.js";
+
+const convexSchema = defineSchema({
+  users: defineTable({
+    email: v.string(),
+    status: v.string(),
+    age: v.number(),
+  }).index("by_status", ["status"]),
+});
+
+const sqlSchema = {
+  tables: {
+    users: {
+      columns: {
+        email: "string",
+        status: "string",
+        age: "number",
+      },
+      indexes: {
+        by_status: ["status"],
+      },
+    },
+  },
+};
+
+const modules = import.meta.glob("./convex/**/*.ts");
+
+describe("Convex runtime integration", () => {
+  test("executes inside a Convex query context", async () => {
+    const t = convexTest(convexSchema, modules);
+    await seedUsers(t);
+
+    const rows = await t.query(async (ctx) => {
+      const sql = new SQL(sqlSchema);
+      return sql(
+        ctx as unknown as ConvexLikeContext,
+        "SELECT COUNT(*) AS count FROM users WHERE status = 'active'",
+      );
+    });
+
+    expect(rows).toEqual([{ count: 2 }]);
+  });
+
+  test("scanHandler pages Convex table rows for action-style execution", async () => {
+    const t = convexTest(convexSchema, modules);
+    await seedUsers(t);
+
+    const firstPage = await t.query((ctx) =>
+      scanHandler(ctx as any, {
+        tableName: "users",
+        cursor: null,
+        numItems: 2,
+      }),
+    );
+
+    expect(firstPage.page).toHaveLength(2);
+    expect(firstPage.isDone).toBe(false);
+  });
+});
+
+async function seedUsers(t: { run: (func: (ctx: any) => Promise<void>) => Promise<void> }): Promise<void> {
+  await t.run(async (ctx) => {
+    await ctx.db.insert("users", { email: "a@gmail.com", status: "active", age: 34 });
+    await ctx.db.insert("users", { email: "b@example.com", status: "inactive", age: 17 });
+    await ctx.db.insert("users", { email: "c@gmail.com", status: "active", age: 28 });
+  });
+}

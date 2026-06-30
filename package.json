@@ -1,0 +1,56 @@
+{
+  "name": "convex-olap",
+  "version": "0.1.0",
+  "description": "SQL-style OLAP query planning and execution helpers for Convex actions and queries.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "vitest run test/e2e",
+    "test:local-backend": "CONVEX_AGENT_MODE=anonymous npx convex dev --once --typecheck disable --tail-logs disable --local-cloud-port 3210 --local-site-port 3211 --start \"CONVEX_URL=http://127.0.0.1:3210 vitest run --config vitest.local-backend.config.ts\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ldanilek/convex-olap.git"
+  },
+  "keywords": [
+    "convex",
+    "sql",
+    "olap",
+    "query-planner"
+  ],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/ldanilek/convex-olap/issues"
+  },
+  "homepage": "https://github.com/ldanilek/convex-olap#readme",
+  "peerDependencies": {
+    "convex": ">=1.32.0"
+  },
+  "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
+    "@types/node": "^26.0.1",
+    "@vitest/coverage-v8": "^4.1.9",
+    "convex": "^1.42.1",
+    "convex-test": "^0.0.54",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}
