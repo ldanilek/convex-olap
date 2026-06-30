@@ -77,7 +77,7 @@ export class PlanExecutor {
     for (const cte of plan.ctes) {
       ctes.set(cte.name, await this.spillIfNeeded(await this.executePlan(ctx, cte.plan, options, { ...state, ctes }), state, `CTE ${cte.name}`));
     }
-    return this.executeNode(ctx, plan.root, options, { ctes, outerRow: state.outerRow });
+    return this.executeNode(ctx, plan.root, options, { ctes, outerRow: state.outerRow, disk: state.disk });
   }
 
   private async executeNode(
@@ -390,7 +390,7 @@ function assertRowBudget(
   const limit = configuredLimit ?? defaultLimit;
   if (count > limit) {
     throw new Error(
-      `${operation} buffered ${count} rows, exceeding the configured limit of ${limit}. Add a selective predicate/index, lower page size, increase maxRowsBuffered/maxRowsRead, or run a future node spill executor for this plan.`,
+      `${operation} buffered ${count} rows, exceeding the configured limit of ${limit}. Add a selective predicate/index, lower page size, increase maxRowsBuffered/maxRowsRead, or run the disk-required plan from a Node action.`,
     );
   }
 }

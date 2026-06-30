@@ -207,6 +207,7 @@ describe("SQL executor", () => {
 
   test("uses disk spill for unpushed ORDER BY plans instead of row-buffer failure", async () => {
     const sql = new SQL(schema, { maxRowsRead: 10 });
+    expect(sql.plan("SELECT email FROM users ORDER BY email ASC").storage.requiresDisk).toBe(true);
 
     const rows = await sql(ctx, "SELECT email FROM users ORDER BY email ASC", { maxRowsBuffered: 2 });
 
