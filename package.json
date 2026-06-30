@@ -22,7 +22,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "vitest run test/e2e"
+    "test:e2e": "vitest run test/e2e",
+    "test:local-backend": "CONVEX_AGENT_MODE=anonymous npx convex dev --once --typecheck disable --tail-logs disable --local-cloud-port 3210 --local-site-port 3211 --start \"CONVEX_URL=http://127.0.0.1:3210 vitest run --config vitest.local-backend.config.ts\""
   },
   "repository": {
     "type": "git",

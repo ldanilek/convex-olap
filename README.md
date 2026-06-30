@@ -114,5 +114,10 @@ await materializePlanToFile(ctx, plan, "/tmp/users.json", {
 npm ci
 npm run typecheck
 npm run test
+npm run test:local-backend
 npm run build
 ```
+
+`npm run test:local-backend` starts an anonymous Convex OSS backend on
+`http://127.0.0.1:3210`, deploys the `convex/` test app, and runs the HTTP
+e2e tests against that local backend.
