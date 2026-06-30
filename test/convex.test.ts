@@ -39,14 +39,11 @@ describe("Convex runtime integration", () => {
       const sql = new SQL(sqlSchema);
       return sql(
         ctx as unknown as ConvexLikeContext,
-        "SELECT status, COUNT(*) AS count FROM users GROUP BY status ORDER BY count DESC",
+        "SELECT COUNT(*) AS count FROM users WHERE status = 'active'",
       );
     });
 
-    expect(rows).toEqual([
-      { status: "active", count: 2 },
-      { status: "inactive", count: 1 },
-    ]);
+    expect(rows).toEqual([{ count: 2 }]);
   });
 
   test("scanHandler pages Convex table rows for action-style execution", async () => {

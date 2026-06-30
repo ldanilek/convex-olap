@@ -413,7 +413,7 @@ class DiskStore {
 
   static async create(): Promise<DiskStore> {
     try {
-      const dynamicImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<any>;
+      const dynamicImport = (0, eval)("(specifier) => import(specifier)") as (specifier: string) => Promise<any>;
       const [fs, os, path] = await Promise.all([
         dynamicImport("node:fs/promises"),
         dynamicImport("node:os"),

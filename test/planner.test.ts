@@ -140,7 +140,18 @@ describe("SQL planner", () => {
   });
 
   test("marks unpushed joins, aggregates, and sorts as requiring disk", () => {
-    const sql = new SQL(schema);
+    const sql = new SQL({
+      tables: {
+        users: {
+          columns: { email: "string", status: "string" },
+          indexes: {},
+        },
+        orders: {
+          columns: { userId: "string", total: "number" },
+          indexes: {},
+        },
+      },
+    });
 
     const plan = sql.plan(`
       SELECT users.email, COUNT(*) AS count
