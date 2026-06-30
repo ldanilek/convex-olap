@@ -2,6 +2,8 @@ import { type Expression, expressionToSQL } from "./ast.js";
 import { aggregateValue, compareValues, evaluateExpression, projectRow, type Row, truthy } from "./evaluate.js";
 import { type AggregatePlan, type IndexUse, type PlanNode, type QueryPlan } from "./planner.js";
 
+export type { Row } from "./evaluate.js";
+
 export type ScanPage = {
   page: Record<string, unknown>[];
   isDone?: boolean;
@@ -26,7 +28,7 @@ export type ExecuteOptions = {
 export type ConvexLikeContext = {
   db?: {
     query(tableName: string): {
-      withIndex?: (indexName: string, callback?: (q: DynamicIndexBuilder) => DynamicIndexBuilder) => unknown;
+      withIndex?: (indexName: string, callback?: (q: DynamicIndexBuilder) => unknown) => unknown;
       collect?: () => Promise<Record<string, unknown>[]>;
       paginate?: (options: { cursor: string | null; numItems: number }) => Promise<ScanPage>;
     };
@@ -35,7 +37,7 @@ export type ConvexLikeContext = {
 };
 
 export type DynamicIndexBuilder = {
-  eq(fieldName: string, value: unknown): DynamicIndexBuilder;
+  eq(fieldName: string, value: unknown): unknown;
 };
 
 export class PlanExecutor {
@@ -217,9 +219,11 @@ async function scanViaDb(
 ): Promise<Record<string, unknown>[]> {
   const query = ctx.db!.query(tableName);
   if (index && query.withIndex) {
-    const indexed = query.withIndex(index.name, (q) =>
-      index.fields.reduce((builder, field) => builder.eq(field, index.equalities[field]), q),
-    ) as { collect?: () => Promise<Record<string, unknown>[]> };
+    const indexed = query.withIndex(index.name, (q) => {
+      let builder: any = q;
+      for (const field of index.fields) builder = builder.eq(field, index.equalities[field]);
+      return builder;
+    }) as { collect?: () => Promise<Record<string, unknown>[]> };
     if (indexed.collect) return indexed.collect();
   }
   if (!query.collect) throw new Error(`Convex query for table "${tableName}" does not support collect().`);

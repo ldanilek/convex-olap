@@ -38,18 +38,17 @@ class SQLRuntime {
   }
 }
 
-export const SQL: new (schema: SchemaSpec, options?: SQLOptions) => SQLCallable = class extends SQLRuntime {
-  constructor(schema: SchemaSpec, options: SQLOptions = {}) {
-    super(schema, options);
-    const runtime = this;
-    const callable = ((ctx: ConvexLikeContext, source: string, executeOptions?: ExecuteOptions) =>
-      runtime.execute(ctx, source, executeOptions)) as SQLCallable;
-    callable.parse = runtime.parse.bind(runtime);
-    callable.plan = runtime.plan.bind(runtime);
-    callable.execute = runtime.execute.bind(runtime);
-    return callable;
-  }
-} as new (schema: SchemaSpec, options?: SQLOptions) => SQLCallable;
+function createSQL(schema: SchemaSpec, options: SQLOptions = {}): SQLCallable {
+  const runtime = new SQLRuntime(schema, options);
+  const callable = ((ctx: ConvexLikeContext, source: string, executeOptions?: ExecuteOptions) =>
+    runtime.execute(ctx, source, executeOptions)) as SQLCallable;
+  callable.parse = runtime.parse.bind(runtime);
+  callable.plan = runtime.plan.bind(runtime);
+  callable.execute = runtime.execute.bind(runtime);
+  return callable;
+}
+
+export const SQL = createSQL as unknown as new (schema: SchemaSpec, options?: SQLOptions) => SQLCallable;
 
 export { expressionToSQL, isAggregateExpression } from "./ast.js";
 export type {

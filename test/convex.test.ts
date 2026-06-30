@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
@@ -27,14 +28,19 @@ const sqlSchema = {
   },
 };
 
+const modules = import.meta.glob("./convex/**/*.ts");
+
 describe("Convex runtime integration", () => {
   test("executes inside a Convex query context", async () => {
-    const t = convexTest(convexSchema);
+    const t = convexTest(convexSchema, modules);
     await seedUsers(t);
 
     const rows = await t.query(async (ctx) => {
       const sql = new SQL(sqlSchema);
-      return sql(ctx as ConvexLikeContext, "SELECT status, COUNT(*) AS count FROM users GROUP BY status ORDER BY count DESC");
+      return sql(
+        ctx as unknown as ConvexLikeContext,
+        "SELECT status, COUNT(*) AS count FROM users GROUP BY status ORDER BY count DESC",
+      );
     });
 
     expect(rows).toEqual([
@@ -44,11 +50,11 @@ describe("Convex runtime integration", () => {
   });
 
   test("scanHandler pages Convex table rows for action-style execution", async () => {
-    const t = convexTest(convexSchema);
+    const t = convexTest(convexSchema, modules);
     await seedUsers(t);
 
     const firstPage = await t.query((ctx) =>
-      scanHandler(ctx, {
+      scanHandler(ctx as any, {
         tableName: "users",
         cursor: null,
         numItems: 2,
@@ -60,7 +66,7 @@ describe("Convex runtime integration", () => {
   });
 });
 
-async function seedUsers(t: ReturnType<typeof convexTest<typeof convexSchema>>): Promise<void> {
+async function seedUsers(t: { run: (func: (ctx: any) => Promise<void>) => Promise<void> }): Promise<void> {
   await t.run(async (ctx) => {
     await ctx.db.insert("users", { email: "a@gmail.com", status: "active", age: 34 });
     await ctx.db.insert("users", { email: "b@example.com", status: "inactive", age: 17 });

@@ -93,11 +93,9 @@ export function aggregateValue(call: CallExpression, rows: Row[]): unknown {
     case "COUNT":
       return call.args[0]?.type === "star" ? rows.length : distinctValues.length;
     case "SUM":
-      return distinctValues.reduce((sum, value) => sum + Number(value), 0);
+      return sumNumbers(distinctValues);
     case "AVG":
-      return distinctValues.length === 0
-        ? null
-        : distinctValues.reduce((sum, value) => sum + Number(value), 0) / distinctValues.length;
+      return distinctValues.length === 0 ? null : sumNumbers(distinctValues) / distinctValues.length;
     case "MIN":
       return distinctValues.reduce<unknown | null>(
         (minimum, value) => (minimum === null || compareValues(value, minimum) < 0 ? value : minimum),
@@ -179,4 +177,8 @@ function uniqueValues(values: unknown[]): unknown[] {
     unique.push(value);
   }
   return unique;
+}
+
+function sumNumbers(values: unknown[]): number {
+  return values.reduce<number>((sum, value) => sum + Number(value), 0);
 }
