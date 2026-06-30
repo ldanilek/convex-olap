@@ -200,7 +200,7 @@ describe("SQL executor", () => {
     const sql = new SQL(schema, { maxRowsRead: 10 });
 
     await expect(sql(ctx, "SELECT email FROM users ORDER BY email ASC", { maxRowsBuffered: 2 })).rejects.toThrow(
-      "ORDER BY buffered 3 rows",
+      "projection buffered 3 rows",
     );
   });
 });
