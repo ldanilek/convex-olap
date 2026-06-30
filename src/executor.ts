@@ -413,11 +413,10 @@ class DiskStore {
 
   static async create(): Promise<DiskStore> {
     try {
-      const dynamicImport = (0, eval)("(specifier) => import(specifier)") as (specifier: string) => Promise<any>;
       const [fs, os, path] = await Promise.all([
-        dynamicImport("node:fs/promises"),
-        dynamicImport("node:os"),
-        dynamicImport("node:path"),
+        import(/* @vite-ignore */ "node:fs/promises"),
+        import(/* @vite-ignore */ "node:os"),
+        import(/* @vite-ignore */ "node:path"),
       ]);
       const dir = path.join(os.tmpdir(), `convex-olap-${randomId()}`);
       const store = new DiskStore(dir, fs, path);
