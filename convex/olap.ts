@@ -1,6 +1,6 @@
 import { actionGeneric, makeFunctionReference, mutationGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
-import { SQL, scanHandler } from "../src/index";
+import { SQL, scanQuery } from "../src/index";
 import schema from "./schema";
 
 export const seed = mutationGeneric({
@@ -21,21 +21,7 @@ export const clear = mutationGeneric({
   handler: clearTables,
 });
 
-export const scan = queryGeneric({
-  args: {
-    tableName: v.string(),
-    cursor: v.optional(v.union(v.string(), v.null())),
-    numItems: v.optional(v.number()),
-    index: v.optional(
-      v.object({
-        name: v.string(),
-        fields: v.array(v.string()),
-        equalities: v.any(),
-      }),
-    ),
-  },
-  handler: async (ctx, args) => scanHandler(ctx as any, args),
-});
+export const scan = scanQuery();
 
 export const runInQuery = queryGeneric({
   args: {

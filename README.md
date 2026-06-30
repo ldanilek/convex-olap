@@ -51,10 +51,10 @@ flowchart LR
   Executor --> Scan{How to scan?}
   Scan -->|Query ctx| DB[ctx.db.query]
   Scan -->|Action ctx| RunQuery[ctx.runQuery scan function]
-  Scan -->|Tests/tools| Adapter[custom scan adapter]
+  Scan -->|Tests/tools| CustomScan[custom scan function]
   DB --> Rows[Rows]
   RunQuery --> Rows
-  Adapter --> Rows
+  CustomScan --> Rows
 ```
 
 Execution is intentionally simple:
@@ -63,8 +63,8 @@ Execution is intentionally simple:
 2. Compile the AST into a plan containing scan, filter, join, aggregate,
    project, sort, and limit nodes.
 3. Annotate scans with usable equality-prefix indexes from the supplied schema.
-4. Collect rows from Convex through a query context, action scan query, or test
-   adapter.
+4. Collect rows from Convex through a query context, action scan query, or
+   custom scan function.
 5. Evaluate the remaining relational operators in memory.
 
 ## Pass your Convex schema
@@ -146,29 +146,13 @@ export const gmailUsers = query({
 ### 2. Run SQL from a Convex action
 
 Convex actions do not expose `ctx.db`, so action execution needs a scan query.
-Register one query in your app that delegates to `scanHandler`.
+Register one query in your app with `scanQuery()`.
 
 ```ts
 // convex/olap.ts
-import { v } from "convex/values";
-import { query } from "./_generated/server";
-import { scanHandler } from "convex-olap";
+import { scanQuery } from "convex-olap";
 
-export const scan = query({
-  args: {
-    tableName: v.string(),
-    cursor: v.optional(v.union(v.string(), v.null())),
-    numItems: v.optional(v.number()),
-    index: v.optional(
-      v.object({
-        name: v.string(),
-        fields: v.array(v.string()),
-        equalities: v.any(),
-      }),
-    ),
-  },
-  handler: async (ctx, args) => scanHandler(ctx, args),
-});
+export const scan = scanQuery();
 ```
 
 Then pass that query reference to `SQL`.
@@ -218,12 +202,14 @@ const rows = await convexSQL(
 );
 ```
 
-### 4. Use a custom scan adapter in tests or scripts
+### 4. Use a custom scan function in tests or scripts
 
-Adapters are useful for unit tests, fixtures, and non-Convex scripts.
+A custom scan function is just a function that receives `{ tableName, index,
+cursor, numItems }` and returns rows. It lets tests and standalone scripts use
+the same executor without starting Convex.
 
 ```ts
-import { SQL, type ScanAdapter } from "convex-olap";
+import { SQL, type ScanFunction } from "convex-olap";
 import schema from "../convex/schema";
 
 const data = {
@@ -233,7 +219,7 @@ const data = {
   ],
 };
 
-const scan: ScanAdapter = async ({ tableName, index }) => {
+const scan: ScanFunction = async ({ tableName, index }) => {
   const rows = data[tableName as keyof typeof data] ?? [];
   if (!index) return rows;
   return rows.filter((row) =>
@@ -247,10 +233,10 @@ const convexSQL = new SQL(schema, { scan });
 const rows = await convexSQL({}, "SELECT COUNT(*) AS count FROM users");
 ```
 
-Adapters may return all rows at once or paginated pages:
+Custom scan functions may return all rows at once or paginated pages:
 
 ```ts
-const scan: ScanAdapter = async ({ tableName, cursor, numItems = 100 }) => {
+const scan: ScanFunction = async ({ tableName, cursor, numItems = 100 }) => {
   const start = cursor ? Number(cursor) : 0;
   const end = start + numItems;
   const rows = data[tableName] ?? [];
@@ -532,8 +518,8 @@ test("uses the status index", () => {
 
 - direct execution in Convex query contexts
 - action execution through `ctx.runQuery`
-- custom scan adapters
-- paginated scan adapters
+- custom scan functions
+- paginated scan functions
 - node-only filesystem materialization through `convex-olap/node`
 
 ### Planner behavior
@@ -581,8 +567,8 @@ npm run test:local-backend
 npm run build
 ```
 
-`npm run test` runs fast parser, planner, executor, Convex-test, adapter, and
-node materialization tests.
+`npm run test` runs fast parser, planner, executor, Convex-test, custom scan
+function, and node materialization tests.
 
 `npm run test:local-backend` starts an anonymous Convex OSS backend on
 `http://127.0.0.1:3210`, deploys the `convex/` test app, and runs HTTP e2e tests

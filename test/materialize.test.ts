@@ -3,12 +3,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { SQL, type ScanAdapter } from "../src/index.js";
+import { SQL, type ScanFunction } from "../src/index.js";
 import { materializePlanToFile } from "../src/node.js";
 
 let tempDir: string | undefined;
 
-const scan: ScanAdapter = async () => [
+const scan: ScanFunction = async () => [
   { email: "a@gmail.com", status: "active" },
   { email: "b@example.com", status: "inactive" },
 ];

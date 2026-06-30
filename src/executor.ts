@@ -17,10 +17,11 @@ export type ScanArgs = {
   numItems?: number;
 };
 
-export type ScanAdapter = (args: ScanArgs) => Promise<Record<string, unknown>[] | ScanPage>;
+export type ScanFunction = (args: ScanArgs) => Promise<Record<string, unknown>[] | ScanPage>;
+export type ScanAdapter = ScanFunction;
 
 export type ExecuteOptions = {
-  scan?: ScanAdapter;
+  scan?: ScanFunction;
   scanQuery?: unknown;
   pageSize?: number;
 };
@@ -161,11 +162,11 @@ export class PlanExecutor {
     index: IndexUse | undefined,
     options: ExecuteOptions,
   ): Promise<Record<string, unknown>[]> {
-    const adapter = options.scan ?? (options.scanQuery ? scanViaFunction(ctx, options.scanQuery) : undefined);
-    if (adapter) return collectPages(adapter, { tableName, index }, options.pageSize);
+    const scan = options.scan ?? (options.scanQuery ? scanViaFunction(ctx, options.scanQuery) : undefined);
+    if (scan) return collectPages(scan, { tableName, index }, options.pageSize);
     if (ctx.db) return scanViaDb(ctx, tableName, index);
     throw new Error(
-      `Cannot scan table "${tableName}" for alias "${alias}". Provide a query context, scan adapter, or scanQuery function reference.`,
+      `Cannot scan table "${tableName}" for alias "${alias}". Provide a query context, custom scan function, or scanQuery function reference.`,
     );
   }
 }
@@ -191,17 +192,17 @@ function distinctRows(rows: Row[]): Row[] {
   return distinct;
 }
 
-function scanViaFunction(ctx: ConvexLikeContext, scanQuery: unknown): ScanAdapter {
+function scanViaFunction(ctx: ConvexLikeContext, scanQuery: unknown): ScanFunction {
   if (!ctx.runQuery) throw new Error("scanQuery execution requires an action context with ctx.runQuery.");
   return (args) => ctx.runQuery!(scanQuery, args);
 }
 
-async function collectPages(adapter: ScanAdapter, args: ScanArgs, pageSize = 256): Promise<Record<string, unknown>[]> {
+async function collectPages(scan: ScanFunction, args: ScanArgs, pageSize = 256): Promise<Record<string, unknown>[]> {
   const rows: Record<string, unknown>[] = [];
   let cursor: string | null | undefined = args.cursor ?? null;
 
   while (true) {
-    const result = await adapter({ ...args, cursor, numItems: pageSize });
+    const result = await scan({ ...args, cursor, numItems: pageSize });
     if (Array.isArray(result)) {
       rows.push(...result);
       return rows;

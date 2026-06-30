@@ -1,3 +1,5 @@
+import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
 import { type ScanArgs, type ScanPage } from "./executor.js";
 
 export type ConvexScanContext = {
@@ -28,4 +30,22 @@ export async function scanHandler(ctx: ConvexScanContext, args: ScanArgs): Promi
   }
 
   return query.paginate({ cursor, numItems });
+}
+
+export function scanQuery() {
+  return queryGeneric({
+    args: {
+      tableName: v.string(),
+      cursor: v.optional(v.union(v.string(), v.null())),
+      numItems: v.optional(v.number()),
+      index: v.optional(
+        v.object({
+          name: v.string(),
+          fields: v.array(v.string()),
+          equalities: v.any(),
+        }),
+      ),
+    },
+    handler: async (ctx, args) => scanHandler(ctx as any, args),
+  });
 }

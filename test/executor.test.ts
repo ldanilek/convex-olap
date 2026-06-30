@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { SQL, type ScanAdapter } from "../src/index.js";
+import { SQL, type ScanFunction } from "../src/index.js";
 
 const schema = {
   tables: {
@@ -40,7 +40,7 @@ const data: Record<string, Record<string, unknown>[]> = {
   ],
 };
 
-const scan: ScanAdapter = async ({ tableName, index }) => {
+const scan: ScanFunction = async ({ tableName, index }) => {
   const rows = data[tableName] ?? [];
   if (!index) return rows;
   return rows.filter((row) =>
@@ -95,7 +95,7 @@ describe("SQL executor", () => {
     ]);
   });
 
-  test("uses paginated scan adapters", async () => {
+  test("uses paginated custom scan functions", async () => {
     const sql = new SQL(schema, {
       scan: async ({ tableName, cursor, numItems }) => {
         const start = cursor ? Number(cursor) : 0;
