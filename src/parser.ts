@@ -1,17 +1,19 @@
 import {
   type BinaryOperator,
+  type CommonTableExpression,
   type Expression,
   type JoinType,
   type OrderBy,
   type Projection,
+  type QueryStatement,
   type Relation,
   type SelectStatement,
 } from "./ast.js";
 import { lex, SQLSyntaxError, type Token } from "./lexer.js";
 
-export function parseSQL(source: string): SelectStatement {
+export function parseSQL(source: string): QueryStatement {
   const parser = new Parser(lex(source));
-  return parser.parseSelectStatement();
+  return parser.parseQueryStatement();
 }
 
 class Parser {
@@ -19,7 +21,42 @@ class Parser {
 
   constructor(private readonly tokens: Token[]) {}
 
-  parseSelectStatement(): SelectStatement {
+  parseQueryStatement(): QueryStatement {
+    const query = this.parseQuery();
+    this.matchPunctuation(";");
+    this.expect("eof");
+    return query;
+  }
+
+  private parseQuery(): QueryStatement {
+    const ctes = this.matchKeyword("WITH") ? this.parseCommonTableExpressions() : [];
+    let query: QueryStatement = this.parseSelectStatement(ctes);
+    while (this.matchKeyword("UNION")) {
+      const all = this.matchKeyword("ALL");
+      query = {
+        type: "setOperation",
+        with: query.with,
+        operator: "UNION",
+        all,
+        left: query,
+        right: this.parseSelectStatement([]),
+      };
+    }
+    return query;
+  }
+
+  private parseCommonTableExpressions(): CommonTableExpression[] {
+    return this.parseCommaList(() => {
+      const name = this.parseIdentifier();
+      this.expectKeyword("AS");
+      this.expectPunctuation("(");
+      const query = this.parseQuery();
+      this.expectPunctuation(")");
+      return { name, query };
+    });
+  }
+
+  private parseSelectStatement(withClause: CommonTableExpression[]): SelectStatement {
     this.expectKeyword("SELECT");
     const distinct = this.matchKeyword("DISTINCT");
     if (!distinct) this.matchKeyword("ALL");
@@ -36,12 +73,9 @@ class Parser {
       : [];
     const limit = this.matchKeyword("LIMIT") ? this.parsePositiveInteger("LIMIT") : undefined;
     const offset = this.matchKeyword("OFFSET") ? this.parsePositiveInteger("OFFSET") : undefined;
-
-    this.matchPunctuation(";");
-    this.expect("eof");
-
     return {
       type: "select",
+      with: withClause,
       distinct,
       projections,
       from,
@@ -120,6 +154,16 @@ class Parser {
   }
 
   private parseTableRelation(): Relation {
+    if (this.matchPunctuation("(")) {
+      if (this.isQueryStart()) {
+        const query = this.parseQuery();
+        this.expectPunctuation(")");
+        const alias = this.matchKeyword("AS") ? this.parseIdentifier() : this.parseIdentifier();
+        return { type: "subquery", query, alias };
+      }
+      throw this.error("Expected subquery in FROM relation");
+    }
+
     const name = this.parseQualifiedName();
     let alias: string | undefined;
     if (this.matchKeyword("AS")) {
@@ -164,6 +208,9 @@ class Parser {
 
   private parseNot(): Expression {
     if (this.matchKeyword("NOT")) {
+      if (this.matchKeyword("EXISTS")) {
+        return { type: "exists", query: this.parseParenthesizedQuery(), not: true };
+      }
       return { type: "unary", operator: "NOT", expression: this.parseNot() };
     }
     return this.parseComparison();
@@ -193,8 +240,16 @@ class Parser {
       }
       if (this.matchKeyword("IN")) {
         this.expectPunctuation("(");
-        const values = this.matchPunctuation(")") ? [] : this.parseExpressionList();
-        this.expectPunctuation(")");
+        let values: Expression[] | QueryStatement;
+        if (this.isQueryStart()) {
+          values = this.parseQuery();
+          this.expectPunctuation(")");
+        } else if (this.matchPunctuation(")")) {
+          values = [];
+        } else {
+          values = this.parseExpressionList();
+          this.expectPunctuation(")");
+        }
         expression = { type: "in", expression, values, not };
         continue;
       }
@@ -204,6 +259,17 @@ class Parser {
 
       const operator = this.matchComparisonOperator();
       if (!operator) break;
+      const quantifier = this.matchKeyword("ANY") ? "ANY" : this.matchKeyword("ALL") ? "ALL" : undefined;
+      if (quantifier) {
+        expression = {
+          type: "quantifiedComparison",
+          operator,
+          left: expression,
+          quantifier,
+          query: this.parseParenthesizedQuery(),
+        };
+        continue;
+      }
       expression = { type: "binary", operator, left: expression, right: this.parseAdditive() };
     }
 
@@ -248,6 +314,11 @@ class Parser {
 
   private parsePrimary(): Expression {
     if (this.matchPunctuation("(")) {
+      if (this.isQueryStart()) {
+        const query = this.parseQuery();
+        this.expectPunctuation(")");
+        return { type: "subquery", query };
+      }
       const expression = this.parseExpression();
       this.expectPunctuation(")");
       return expression;
@@ -265,6 +336,7 @@ class Parser {
     if (this.matchKeyword("NULL")) return { type: "literal", value: null };
     if (this.matchKeyword("TRUE")) return { type: "literal", value: true };
     if (this.matchKeyword("FALSE")) return { type: "literal", value: false };
+    if (this.matchKeyword("EXISTS")) return { type: "exists", query: this.parseParenthesizedQuery(), not: false };
     if (this.matchOperator("*")) return { type: "star" };
 
     const name = this.parseIdentifier();
@@ -304,6 +376,18 @@ class Parser {
     return name;
   }
 
+  private parseParenthesizedQuery(): QueryStatement {
+    this.expectPunctuation("(");
+    const query = this.parseQuery();
+    this.expectPunctuation(")");
+    return query;
+  }
+
+  private isQueryStart(): boolean {
+    const token = this.current();
+    return token.type === "keyword" && (token.value === "SELECT" || token.value === "WITH");
+  }
+
   private parseIdentifier(): string {
     const token = this.current();
     if (token.type === "identifier") {
@@ -332,6 +416,7 @@ class Parser {
   private isClauseKeyword(value: string): boolean {
     return [
       "AND",
+      "ANY",
       "ASC",
       "BETWEEN",
       "BY",
@@ -355,11 +440,13 @@ class Parser {
       "ORDER",
       "OUTER",
       "RIGHT",
+      "UNION",
       "WHERE",
+      "WITH",
     ].includes(value);
   }
 
-  private matchComparisonOperator(): BinaryOperator | undefined {
+  private matchComparisonOperator(): Exclude<BinaryOperator, "OR" | "AND" | "+" | "-" | "*" | "/"> | undefined {
     for (const operator of ["=", "!=", "<>", "<=", ">=", "<", ">"] as const) {
       if (this.matchOperator(operator)) return operator;
     }

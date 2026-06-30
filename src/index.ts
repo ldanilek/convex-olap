@@ -1,4 +1,4 @@
-import { type SelectStatement } from "./ast.js";
+import { type QueryStatement } from "./ast.js";
 import { type ConvexLikeContext, type ExecuteOptions, PlanExecutor, type Row } from "./executor.js";
 import { parseSQL } from "./parser.js";
 import { type QueryPlan, SQLPlanner } from "./planner.js";
@@ -8,27 +8,28 @@ export type SQLOptions = ExecuteOptions;
 
 export type SQLCallable = {
   (ctx: ConvexLikeContext, source: string, options?: ExecuteOptions): Promise<Row[]>;
-  parse(source: string): SelectStatement;
-  plan(sourceOrAst: string | SelectStatement): QueryPlan;
+  parse(source: string): QueryStatement;
+  plan(sourceOrAst: string | QueryStatement): QueryPlan;
   execute(ctx: ConvexLikeContext, sourceOrPlan: string | QueryPlan, options?: ExecuteOptions): Promise<Row[]>;
 };
 
 class SQLRuntime {
   private readonly planner: SQLPlanner;
-  private readonly executor = new PlanExecutor();
+  private readonly executor: PlanExecutor;
 
   constructor(
     schema: SchemaSpec,
     private readonly defaults: SQLOptions = {},
   ) {
     this.planner = new SQLPlanner(schema);
+    this.executor = new PlanExecutor(this.planner);
   }
 
-  parse(source: string): SelectStatement {
+  parse(source: string): QueryStatement {
     return parseSQL(source);
   }
 
-  plan(sourceOrAst: string | SelectStatement): QueryPlan {
+  plan(sourceOrAst: string | QueryStatement): QueryPlan {
     return this.planner.plan(typeof sourceOrAst === "string" ? this.parse(sourceOrAst) : sourceOrAst);
   }
 
@@ -54,6 +55,7 @@ export { expressionToSQL, isAggregateExpression } from "./ast.js";
 export type {
   BinaryExpression,
   CallExpression,
+  CommonTableExpression,
   Expression,
   IdentifierExpression,
   JoinRelation,
@@ -61,8 +63,11 @@ export type {
   LiteralExpression,
   OrderBy,
   Projection,
+  QueryStatement,
   Relation,
   SelectStatement,
+  SetOperationStatement,
+  SubqueryRelation,
   TableRelation,
 } from "./ast.js";
 export { scanHandler, scanQuery } from "./convex.js";
@@ -71,16 +76,23 @@ export type { ConvexLikeContext, ExecuteOptions, Row, ScanArgs, ScanPage } from 
 export type {
   AggregateNode,
   AggregatePlan,
+  AggregatePushdown,
+  CtePlan,
   FilterNode,
   IndexUse,
   JoinNode,
+  JoinPushdown,
   LimitNode,
   PlanNode,
   PlannedTable,
   ProjectNode,
+  PushdownPlan,
   QueryPlan,
   ScanNode,
   SortNode,
+  SortPushdown,
+  SubqueryScanNode,
+  UnionNode,
 } from "./planner.js";
 export { SQLPlanner } from "./planner.js";
 export type { ColumnSpec, IndexSpec, NormalizedSchema, SchemaSpec, TableSpec } from "./schema.js";

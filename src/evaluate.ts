@@ -4,9 +4,12 @@ import {
   type Expression,
   expressionToSQL,
   type Projection,
+  type QueryStatement,
 } from "./ast.js";
 
 export type Row = Record<string, unknown>;
+
+export type SubqueryEvaluator = (query: QueryStatement, outerRow: Row) => Promise<Row[]>;
 
 export function evaluateExpression(expression: Expression, row: Row): unknown {
   switch (expression.type) {
@@ -39,12 +42,89 @@ export function evaluateExpression(expression: Expression, row: Row): unknown {
     }
     case "in": {
       const value = evaluateExpression(expression.expression, row);
-      const matches = expression.values.some((candidate) => compareValues(value, evaluateExpression(candidate, row)) === 0);
+      const matches =
+        Array.isArray(expression.values) &&
+        expression.values.some((candidate) => compareValues(value, evaluateExpression(candidate, row)) === 0);
       return expression.not ? !matches : matches;
     }
     case "isNull": {
       const matches = evaluateExpression(expression.expression, row) == null;
       return expression.not ? !matches : matches;
+    }
+    case "exists":
+    case "subquery":
+    case "quantifiedComparison":
+      throw new Error(`Expression ${expression.type} requires async subquery evaluation.`);
+  }
+}
+
+export async function evaluateExpressionAsync(
+  expression: Expression,
+  row: Row,
+  evaluateSubquery: SubqueryEvaluator,
+): Promise<unknown> {
+  switch (expression.type) {
+    case "literal":
+    case "identifier":
+    case "star":
+    case "call":
+      return evaluateExpression(expression, row);
+    case "unary": {
+      const value = await evaluateExpressionAsync(expression.expression, row, evaluateSubquery);
+      if (expression.operator === "NOT") return !truthy(value);
+      if (expression.operator === "-") return -Number(value);
+      return Number(value);
+    }
+    case "binary":
+      return evaluateBinary(
+        expression.operator,
+        await evaluateExpressionAsync(expression.left, row, evaluateSubquery),
+        await evaluateExpressionAsync(expression.right, row, evaluateSubquery),
+      );
+    case "like":
+      return expression.not
+        ? !matchesLike(
+            await evaluateExpressionAsync(expression.expression, row, evaluateSubquery),
+            await evaluateExpressionAsync(expression.pattern, row, evaluateSubquery),
+          )
+        : matchesLike(
+            await evaluateExpressionAsync(expression.expression, row, evaluateSubquery),
+            await evaluateExpressionAsync(expression.pattern, row, evaluateSubquery),
+          );
+    case "between": {
+      const value = await evaluateExpressionAsync(expression.expression, row, evaluateSubquery);
+      const lower = await evaluateExpressionAsync(expression.lower, row, evaluateSubquery);
+      const upper = await evaluateExpressionAsync(expression.upper, row, evaluateSubquery);
+      const matches = compareValues(value, lower) >= 0 && compareValues(value, upper) <= 0;
+      return expression.not ? !matches : matches;
+    }
+    case "in": {
+      const value = await evaluateExpressionAsync(expression.expression, row, evaluateSubquery);
+      const values = Array.isArray(expression.values)
+        ? await Promise.all(expression.values.map((candidate) => evaluateExpressionAsync(candidate, row, evaluateSubquery)))
+        : firstColumnValues(await evaluateSubquery(expression.values, row));
+      const matches = values.some((candidate) => compareValues(value, candidate) === 0);
+      return expression.not ? !matches : matches;
+    }
+    case "isNull": {
+      const matches = (await evaluateExpressionAsync(expression.expression, row, evaluateSubquery)) == null;
+      return expression.not ? !matches : matches;
+    }
+    case "exists": {
+      const rows = await evaluateSubquery(expression.query, row);
+      const matches = rows.length > 0;
+      return expression.not ? !matches : matches;
+    }
+    case "subquery": {
+      const rows = await evaluateSubquery(expression.query, row);
+      return rows.length === 0 ? null : firstColumnValues(rows)[0];
+    }
+    case "quantifiedComparison": {
+      const left = await evaluateExpressionAsync(expression.left, row, evaluateSubquery);
+      const values = firstColumnValues(await evaluateSubquery(expression.query, row));
+      if (values.length === 0) return expression.quantifier === "ALL";
+      const comparisons = values.map((value) => truthy(evaluateBinary(expression.operator, left, value)));
+      return expression.quantifier === "ANY" ? comparisons.some(Boolean) : comparisons.every(Boolean);
     }
   }
 }
@@ -74,6 +154,23 @@ export function projectRow(row: Row, projections: Projection[]): Row {
     }
     const key = projection.alias ?? defaultProjectionName(projection.expression);
     projected[key] = evaluateExpression(projection.expression, row);
+  }
+  return projected;
+}
+
+export async function projectRowAsync(
+  row: Row,
+  projections: Projection[],
+  evaluateSubquery: SubqueryEvaluator,
+): Promise<Row> {
+  const projected: Row = {};
+  for (const projection of projections) {
+    if (projection.expression.type === "star") {
+      Object.assign(projected, expandStar(row, projection.expression.table));
+      continue;
+    }
+    const key = projection.alias ?? defaultProjectionName(projection.expression);
+    projected[key] = await evaluateExpressionAsync(projection.expression, row, evaluateSubquery);
   }
   return projected;
 }
@@ -181,4 +278,11 @@ function uniqueValues(values: unknown[]): unknown[] {
 
 function sumNumbers(values: unknown[]): number {
   return values.reduce<number>((sum, value) => sum + Number(value), 0);
+}
+
+function firstColumnValues(rows: Row[]): unknown[] {
+  return rows.map((row) => {
+    const entry = Object.entries(row)[0];
+    return entry ? entry[1] : undefined;
+  });
 }

@@ -384,6 +384,8 @@ test("uses the status index", () => {
 - `ORDER BY`
 - `LIMIT`
 - `OFFSET`
+- CTEs with `WITH name AS (...)`
+- `UNION` and `UNION ALL`
 
 ### Projections
 
@@ -397,6 +399,7 @@ test("uses the status index", () => {
 
 - table names
 - table aliases
+- derived tables with `FROM (SELECT ...) AS alias`
 - comma joins as cross joins
 - `INNER JOIN`
 - `LEFT JOIN`
@@ -417,7 +420,11 @@ test("uses the status index", () => {
 - `LIKE` and `NOT LIKE`
 - `BETWEEN` and `NOT BETWEEN`
 - `IN` and `NOT IN`
+- `IN (SELECT ...)` and `NOT IN (SELECT ...)`
 - `IS NULL` and `IS NOT NULL`
+- `EXISTS (SELECT ...)` and `NOT EXISTS (SELECT ...)`
+- `ANY (SELECT ...)` and `ALL (SELECT ...)` quantified comparisons
+- scalar subquery expressions
 
 ### Aggregates
 
@@ -437,6 +444,10 @@ test("uses the status index", () => {
 
 - schema-only planning
 - equality-prefix index detection
+- CTE and `UNION` planning
+- subquery planning for predicates and derived tables
+- pushdown annotations for joins, ordered grouping, and sorts that line up with
+  Convex indexes
 - missing-table warnings
 - inspectable AST and plan tree
 
@@ -447,9 +458,7 @@ Unsupported features include:
 
 - data modification statements: `INSERT`, `UPDATE`, `DELETE`, `MERGE`
 - DDL: `CREATE`, `ALTER`, `DROP`
-- subqueries
-- CTEs / `WITH`
-- set operations: `UNION`, `INTERSECT`, `EXCEPT`
+- set operations other than `UNION`, such as `INTERSECT` and `EXCEPT`
 - window functions
 - `CASE`
 - `CAST`
@@ -457,12 +466,11 @@ Unsupported features include:
 - `NULLS FIRST` / `NULLS LAST`
 - `ORDER BY` ordinal positions
 - `GROUPING SETS`, `ROLLUP`, and `CUBE`
-- `EXISTS`
-- `ANY` / `ALL` subquery predicates
 - outer join null-padding for every missing column in the schema
 - SQL type checking and coercion rules beyond simple JavaScript evaluation
 - query optimization based on table sizes, histograms, or runtime statistics
-- pushing joins, aggregates, or sorts into Convex indexes
+- physical execution of join, aggregate, or sort pushdowns; current pushdown
+  information is inspectable planner metadata
 - streaming output from the executor; current execution collects pages before
   evaluating relational operators
 - writing result files or persistent materialized views

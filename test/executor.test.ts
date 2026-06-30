@@ -121,4 +121,70 @@ describe("SQL executor", () => {
     const rows = await sql(ctx, "SELECT COUNT(*) AS count FROM users WHERE status = 'active'");
     expect(rows).toEqual([{ count: 2 }]);
   });
+
+  test("executes CTEs and correlated EXISTS subqueries", async () => {
+    const sql = new SQL(schema);
+    const rows = await sql(
+      ctx,
+      `
+        WITH active_users AS (
+          SELECT _id, email, age FROM users WHERE status = 'active'
+        )
+        SELECT email
+        FROM active_users
+        WHERE EXISTS (
+          SELECT _id FROM orders WHERE orders.userId = active_users._id
+        )
+        ORDER BY email ASC
+      `,
+    );
+
+    expect(rows).toEqual([{ email: "a@gmail.com" }, { email: "c@gmail.com" }]);
+  });
+
+  test("executes UNION with distinct rows", async () => {
+    const sql = new SQL(schema);
+    const rows = await sql(
+      ctx,
+      `
+        SELECT status FROM users WHERE status = 'active'
+        UNION
+        SELECT status FROM users WHERE age < 30
+        ORDER BY status ASC
+      `,
+    );
+
+    expect(rows).toEqual([{ status: "active" }, { status: "inactive" }]);
+  });
+
+  test("executes IN, ANY, and ALL subquery predicates", async () => {
+    const sql = new SQL(schema);
+    const rows = await sql(
+      ctx,
+      `
+        SELECT email
+        FROM users
+        WHERE _id IN (SELECT userId FROM orders)
+          AND age >= ANY (SELECT age FROM users WHERE status = 'inactive')
+          AND age >= ALL (SELECT age FROM users WHERE status = 'inactive')
+        ORDER BY email ASC
+      `,
+    );
+
+    expect(rows).toEqual([{ email: "a@gmail.com" }, { email: "c@gmail.com" }]);
+  });
+
+  test("executes subquery relations", async () => {
+    const sql = new SQL(schema);
+    const rows = await sql(
+      ctx,
+      `
+        SELECT recent.email
+        FROM (SELECT email, age FROM users WHERE age > 20) AS recent
+        ORDER BY recent.email ASC
+      `,
+    );
+
+    expect(rows).toEqual([{ email: "a@gmail.com" }, { email: "c@gmail.com" }]);
+  });
 });

@@ -1,7 +1,15 @@
 export type SQLValue = string | number | boolean | null;
 
+export type QueryStatement = SelectStatement | SetOperationStatement;
+
+export type CommonTableExpression = {
+  name: string;
+  query: QueryStatement;
+};
+
 export type SelectStatement = {
   type: "select";
+  with: CommonTableExpression[];
   distinct: boolean;
   projections: Projection[];
   from?: Relation;
@@ -13,17 +21,32 @@ export type SelectStatement = {
   offset?: number;
 };
 
+export type SetOperationStatement = {
+  type: "setOperation";
+  with: CommonTableExpression[];
+  operator: "UNION";
+  all: boolean;
+  left: QueryStatement;
+  right: QueryStatement;
+};
+
 export type Projection = {
   expression: Expression;
   alias?: string;
 };
 
-export type Relation = TableRelation | JoinRelation;
+export type Relation = TableRelation | SubqueryRelation | JoinRelation;
 
 export type TableRelation = {
   type: "table";
   name: string;
   alias?: string;
+};
+
+export type SubqueryRelation = {
+  type: "subquery";
+  query: QueryStatement;
+  alias: string;
 };
 
 export type JoinType = "inner" | "left" | "right" | "full" | "cross";
@@ -68,7 +91,10 @@ export type Expression =
   | LikeExpression
   | BetweenExpression
   | InExpression
-  | IsNullExpression;
+  | IsNullExpression
+  | ExistsExpression
+  | SubqueryExpression
+  | QuantifiedComparisonExpression;
 
 export type LiteralExpression = {
   type: "literal";
@@ -124,7 +150,7 @@ export type BetweenExpression = {
 export type InExpression = {
   type: "in";
   expression: Expression;
-  values: Expression[];
+  values: Expression[] | QueryStatement;
   not: boolean;
 };
 
@@ -132,6 +158,27 @@ export type IsNullExpression = {
   type: "isNull";
   expression: Expression;
   not: boolean;
+};
+
+export type ExistsExpression = {
+  type: "exists";
+  query: QueryStatement;
+  not: boolean;
+};
+
+export type SubqueryExpression = {
+  type: "subquery";
+  query: QueryStatement;
+};
+
+export type Quantifier = "ANY" | "ALL";
+
+export type QuantifiedComparisonExpression = {
+  type: "quantifiedComparison";
+  operator: Exclude<BinaryOperator, "OR" | "AND" | "+" | "-" | "*" | "/">;
+  left: Expression;
+  quantifier: Quantifier;
+  query: QueryStatement;
 };
 
 export const aggregateFunctions = new Set(["COUNT", "SUM", "AVG", "MIN", "MAX"]);
@@ -155,10 +202,14 @@ export function isAggregateExpression(expression: Expression): boolean {
     case "in":
       return (
         isAggregateExpression(expression.expression) ||
-        expression.values.some((value) => isAggregateExpression(value))
+        (Array.isArray(expression.values)
+          ? expression.values.some((value) => isAggregateExpression(value))
+          : false)
       );
     case "isNull":
       return isAggregateExpression(expression.expression);
+    case "quantifiedComparison":
+      return isAggregateExpression(expression.left);
     default:
       return false;
   }
@@ -191,10 +242,34 @@ export function expressionToSQL(expression: Expression): string {
         expression.lower,
       )} AND ${expressionToSQL(expression.upper)}`;
     case "in":
-      return `${expressionToSQL(expression.expression)} ${expression.not ? "NOT " : ""}IN (${expression.values
-        .map(expressionToSQL)
-        .join(", ")})`;
+      return `${expressionToSQL(expression.expression)} ${expression.not ? "NOT " : ""}IN (${
+        Array.isArray(expression.values) ? expression.values.map(expressionToSQL).join(", ") : queryToSQL(expression.values)
+      })`;
     case "isNull":
       return `${expressionToSQL(expression.expression)} IS ${expression.not ? "NOT " : ""}NULL`;
+    case "exists":
+      return `${expression.not ? "NOT " : ""}EXISTS (${queryToSQL(expression.query)})`;
+    case "subquery":
+      return `(${queryToSQL(expression.query)})`;
+    case "quantifiedComparison":
+      return `${expressionToSQL(expression.left)} ${expression.operator} ${expression.quantifier} (${queryToSQL(
+        expression.query,
+      )})`;
   }
+}
+
+export function queryToSQL(query: QueryStatement): string {
+  const withClause =
+    query.with.length > 0
+      ? `WITH ${query.with.map((cte) => `${cte.name} AS (${queryToSQL(cte.query)})`).join(", ")} `
+      : "";
+  if (query.type === "setOperation") {
+    return `${withClause}${queryToSQL(query.left)} ${query.operator}${query.all ? " ALL" : ""} ${queryToSQL(
+      query.right,
+    )}`;
+  }
+  const projections = query.projections
+    .map((projection) => `${expressionToSQL(projection.expression)}${projection.alias ? ` AS ${projection.alias}` : ""}`)
+    .join(", ");
+  return `${withClause}SELECT ${query.distinct ? "DISTINCT " : ""}${projections}`;
 }

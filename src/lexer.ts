@@ -16,6 +16,7 @@ export type Token = {
 const keywords = new Set([
   "ALL",
   "AND",
+  "ANY",
   "AS",
   "ASC",
   "AVG",
@@ -25,6 +26,7 @@ const keywords = new Set([
   "CROSS",
   "DESC",
   "DISTINCT",
+  "EXISTS",
   "FALSE",
   "FROM",
   "FULL",
@@ -50,7 +52,9 @@ const keywords = new Set([
   "SELECT",
   "SUM",
   "TRUE",
+  "UNION",
   "WHERE",
+  "WITH",
 ]);
 
 export class SQLSyntaxError extends Error {
