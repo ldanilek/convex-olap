@@ -22,6 +22,7 @@ export type QueryPlan = {
   aggregates: AggregatePlan[];
   executionMode: "singleQuery" | "actionLoop" | "inMemory";
   pushdown: PushdownPlan;
+  storage: StoragePlan;
   warnings: string[];
 };
 
@@ -137,6 +138,11 @@ export type PushdownPlan = {
   sorts: SortPushdown[];
 };
 
+export type StoragePlan = {
+  requiresDisk: boolean;
+  reasons: string[];
+};
+
 export type JoinPushdown = {
   tableName: string;
   alias: string;
@@ -184,6 +190,7 @@ export class SQLPlanner {
         aggregates: [...left.aggregates, ...right.aggregates],
         executionMode: "inMemory",
         pushdown: mergePushdown(left.pushdown, right.pushdown),
+        storage: mergeStorage({ requiresDisk: true, reasons: ["UNION buffers branch results"] }, left.storage, right.storage),
         warnings: [...warnings, ...left.warnings, ...right.warnings],
       };
     }
@@ -212,6 +219,7 @@ export class SQLPlanner {
       root = { type: "limit", input: root, limit: ast.limit, offset: ast.offset };
     }
 
+    const pushdown = planPushdown(ast, tables);
     return {
       type: "query",
       ast,
@@ -220,7 +228,8 @@ export class SQLPlanner {
       tables,
       aggregates,
       executionMode: chooseExecutionMode(ast, tables),
-      pushdown: planPushdown(ast, tables),
+      pushdown,
+      storage: planStorage(ast, root, pushdown, ctes.map((cte) => cte.plan.storage)),
       warnings,
     };
   }
@@ -281,6 +290,33 @@ function mergePushdown(left: PushdownPlan, right: PushdownPlan): PushdownPlan {
     aggregates: [...left.aggregates, ...right.aggregates],
     sorts: [...left.sorts, ...right.sorts],
   };
+}
+
+function mergeStorage(...plans: StoragePlan[]): StoragePlan {
+  const reasons = [...new Set(plans.flatMap((plan) => plan.reasons))];
+  return { requiresDisk: reasons.length > 0 || plans.some((plan) => plan.requiresDisk), reasons };
+}
+
+function planStorage(
+  ast: SelectStatement,
+  root: PlanNode,
+  pushdown: PushdownPlan,
+  cteStorage: StoragePlan[],
+): StoragePlan {
+  const reasons: string[] = [];
+  if (containsNode(root, "subqueryScan")) reasons.push("derived table subquery buffers rows");
+  if (containsNode(root, "join") && pushdown.joins.length === 0) reasons.push("join is not backed by an index pushdown");
+  if (ast.groupBy.length > 0 && pushdown.aggregates.length === 0) reasons.push("GROUP BY is not backed by index ordering");
+  if (ast.orderBy.length > 0 && pushdown.sorts.length === 0) reasons.push("ORDER BY is not backed by index ordering");
+  return mergeStorage({ requiresDisk: reasons.length > 0, reasons }, ...cteStorage);
+}
+
+function containsNode(root: PlanNode, type: PlanNode["type"]): boolean {
+  if (root.type === type) return true;
+  if ("input" in root) return containsNode(root.input, type);
+  if (root.type === "join") return containsNode(root.left, type) || containsNode(root.right, type);
+  if (root.type === "union") return containsNode(root.left, type) || containsNode(root.right, type);
+  return false;
 }
 
 function planPushdown(ast: SelectStatement, tables: PlannedTable[]): PushdownPlan {

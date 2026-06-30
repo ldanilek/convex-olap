@@ -138,4 +138,24 @@ describe("SQL planner", () => {
       indexName: "by_email",
     });
   });
+
+  test("marks unpushed joins, aggregates, and sorts as requiring disk", () => {
+    const sql = new SQL(schema);
+
+    const plan = sql.plan(`
+      SELECT users.email, COUNT(*) AS count
+      FROM users JOIN orders ON users.email = orders.userId
+      GROUP BY users.email
+      ORDER BY count DESC
+    `);
+
+    expect(plan.storage.requiresDisk).toBe(true);
+    expect(plan.storage.reasons).toEqual(
+      expect.arrayContaining([
+        "join is not backed by an index pushdown",
+        "GROUP BY is not backed by index ordering",
+        "ORDER BY is not backed by index ordering",
+      ]),
+    );
+  });
 });

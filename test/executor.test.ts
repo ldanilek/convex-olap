@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, test } from "vitest";
 import { SQL } from "../src/index.js";
 
@@ -199,8 +200,16 @@ describe("SQL executor", () => {
   test("fails when in-memory operators exceed configured buffer limits", async () => {
     const sql = new SQL(schema, { maxRowsRead: 10 });
 
-    await expect(sql(ctx, "SELECT email FROM users ORDER BY email ASC", { maxRowsBuffered: 2 })).rejects.toThrow(
+    await expect(sql(ctx, "SELECT email FROM users", { maxRowsBuffered: 2 })).rejects.toThrow(
       "projection buffered 3 rows",
     );
+  });
+
+  test("uses disk spill for unpushed ORDER BY plans instead of row-buffer failure", async () => {
+    const sql = new SQL(schema, { maxRowsRead: 10 });
+
+    const rows = await sql(ctx, "SELECT email FROM users ORDER BY email ASC", { maxRowsBuffered: 2 });
+
+    expect(rows).toEqual([{ email: "a@gmail.com" }, { email: "b@example.com" }, { email: "c@gmail.com" }]);
   });
 });

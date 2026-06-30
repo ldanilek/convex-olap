@@ -91,6 +91,7 @@ export type {
   ScanNode,
   SortNode,
   SortPushdown,
+  StoragePlan,
   SubqueryScanNode,
   UnionNode,
 } from "./planner.js";

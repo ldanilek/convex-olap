@@ -7,7 +7,7 @@ const deploymentUrl = process.env.CONVEX_URL ?? "http://127.0.0.1:3210";
 const seed = makeFunctionReference<"mutation">("olap:seed");
 const clear = makeFunctionReference<"mutation">("olap:clear");
 const runInQuery = makeFunctionReference<"query">("olap:runInQuery");
-const runInAction = makeFunctionReference<"action">("olap:runInAction");
+const runInAction = makeFunctionReference<"action">("olapNode:runInAction");
 
 describe("local Convex backend OLAP execution", () => {
   const client = new ConvexHttpClient(deploymentUrl, {
@@ -26,17 +26,13 @@ describe("local Convex backend OLAP execution", () => {
   test("executes SQL directly in a Convex query context", async () => {
     const rows = await client.query(runInQuery, {
       source: `
-        SELECT status, COUNT(*) AS count
+        SELECT COUNT(*) AS count
         FROM users
-        GROUP BY status
-        ORDER BY count DESC
+        WHERE status = 'active'
       `,
     });
 
-    expect(rows).toEqual([
-      { status: "active", count: 2 },
-      { status: "inactive", count: 1 },
-    ]);
+    expect(rows).toEqual([{ count: 2 }]);
   });
 
   test("executes SQL from an action through paginated scan queries", async () => {

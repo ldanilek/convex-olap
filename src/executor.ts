@@ -52,13 +52,19 @@ const DEFAULT_MAX_ROWS_BUFFERED = 10_000;
 type ExecutionState = {
   ctes: Map<string, Row[]>;
   outerRow: Row;
+  disk?: DiskStore;
 };
 
 export class PlanExecutor {
   constructor(private readonly planner?: SQLPlanner) {}
 
   async execute(ctx: ConvexLikeContext, plan: QueryPlan, options: ExecuteOptions = {}): Promise<Row[]> {
-    return this.executePlan(ctx, plan, options, { ctes: new Map(), outerRow: {} });
+    const disk = plan.storage.requiresDisk ? await DiskStore.create() : undefined;
+    try {
+      return await this.executePlan(ctx, plan, options, { ctes: new Map(), outerRow: {}, disk });
+    } finally {
+      await disk?.cleanup();
+    }
   }
 
   private async executePlan(
@@ -69,7 +75,7 @@ export class PlanExecutor {
   ): Promise<Row[]> {
     const ctes = new Map(state.ctes);
     for (const cte of plan.ctes) {
-      ctes.set(cte.name, await this.executePlan(ctx, cte.plan, options, { ctes, outerRow: state.outerRow }));
+      ctes.set(cte.name, await this.spillIfNeeded(await this.executePlan(ctx, cte.plan, options, { ...state, ctes }), state, `CTE ${cte.name}`));
     }
     return this.executeNode(ctx, plan.root, options, { ctes, outerRow: state.outerRow });
   }
@@ -89,7 +95,8 @@ export class PlanExecutor {
         );
       case "subqueryScan": {
         const rows = await this.executePlan(ctx, node.plan, options, state);
-        assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "subquery relation");
+        await this.spillIfNeeded(rows, state, "subquery relation");
+        if (!state.disk) assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "subquery relation");
         return rows.map((row) => qualifyRow(row, node.alias, state.outerRow));
       }
       case "filter":
@@ -106,12 +113,14 @@ export class PlanExecutor {
             projectRowAsync(row, node.projections, (query, outerRow) => this.executeSubquery(ctx, query, outerRow, options, state)),
           ),
         );
-        assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "projection");
+        await this.spillIfNeeded(rows, state, "projection");
+        if (!state.disk) assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "projection");
         return node.distinct ? distinctRows(rows) : rows;
       }
       case "sort": {
         const rows = await this.executeNode(ctx, node.input, options, state);
-        assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "ORDER BY");
+        await this.spillIfNeeded(rows, state, "ORDER BY input");
+        if (!state.disk) assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "ORDER BY");
         const keyed = await Promise.all(
           rows.map(async (row) => ({
             row,
@@ -128,7 +137,7 @@ export class PlanExecutor {
           }
           return 0;
         });
-        return keyed.map((entry) => entry.row);
+        return this.spillIfNeeded(keyed.map((entry) => entry.row), state, "ORDER BY output");
       }
       case "limit": {
         const rows = await this.executeNode(ctx, node.input, options, state);
@@ -140,8 +149,9 @@ export class PlanExecutor {
           ...(await this.executeNode(ctx, node.left, options, state)),
           ...(await this.executeNode(ctx, node.right, options, state)),
         ];
-        assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "UNION");
-        return node.all ? rows : distinctRows(rows);
+        await this.spillIfNeeded(rows, state, "UNION input");
+        if (!state.disk) assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "UNION");
+        return this.spillIfNeeded(node.all ? rows : distinctRows(rows), state, "UNION output");
       }
     }
   }
@@ -154,7 +164,9 @@ export class PlanExecutor {
   ): Promise<Row[]> {
     const leftRows = await this.executeNode(ctx, node.left, options, state);
     const rightRows = await this.executeNode(ctx, node.right, options, state);
-    assertRowBudget(leftRows.length + rightRows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN inputs");
+    await this.spillIfNeeded(leftRows, state, "JOIN left input");
+    await this.spillIfNeeded(rightRows, state, "JOIN right input");
+    if (!state.disk) assertRowBudget(leftRows.length + rightRows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN inputs");
     const joined: Row[] = [];
     const matchedRight = new Set<number>();
 
@@ -164,14 +176,14 @@ export class PlanExecutor {
         const row = { ...left, ...right };
         if (!node.on || truthy(await this.evaluateExpression(ctx, node.on, row, options, state))) {
           joined.push(row);
-          assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
+          if (!state.disk) assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
           matched = true;
           matchedRight.add(rightIndex);
         }
       }
       if (!matched && (node.joinType === "left" || node.joinType === "full")) {
         joined.push(left);
-        assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
+        if (!state.disk) assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
       }
     }
 
@@ -179,12 +191,12 @@ export class PlanExecutor {
       for (const [rightIndex, right] of rightRows.entries()) {
         if (!matchedRight.has(rightIndex)) {
           joined.push(right);
-          assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
+          if (!state.disk) assertRowBudget(joined.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "JOIN output");
         }
       }
     }
 
-    return joined;
+    return this.spillIfNeeded(joined, state, "JOIN output");
   }
 
   private async executeAggregate(
@@ -197,7 +209,8 @@ export class PlanExecutor {
     state: ExecutionState,
   ): Promise<Row[]> {
     const rows = await this.executeNode(ctx, input, options, state);
-    assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "aggregate input");
+    await this.spillIfNeeded(rows, state, "aggregate input");
+    if (!state.disk) assertRowBudget(rows.length, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "aggregate input");
     const groups = new Map<string, { keys: unknown[]; rows: Row[] }>();
 
     for (const row of rows) {
@@ -206,7 +219,7 @@ export class PlanExecutor {
       const group = groups.get(key);
       if (group) group.rows.push(row);
       else groups.set(key, { keys, rows: [row] });
-      assertRowBudget(groups.size, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "aggregate groups");
+      if (!state.disk) assertRowBudget(groups.size, options.maxRowsBuffered, DEFAULT_MAX_ROWS_BUFFERED, "aggregate groups");
     }
 
     if (groups.size === 0 && groupBy.length === 0) {
@@ -226,7 +239,7 @@ export class PlanExecutor {
       if (!having || truthy(await this.evaluateExpression(ctx, having, row, options, state))) output.push(row);
     }
 
-    return output;
+    return this.spillIfNeeded(output, state, "aggregate output");
   }
 
   private async scan(
@@ -239,14 +252,14 @@ export class PlanExecutor {
   ): Promise<Record<string, unknown>[]> {
     if (state.ctes.has(tableName)) {
       const rows = state.ctes.get(tableName)!;
-      assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `CTE ${tableName}`);
+      if (!state.disk) assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `CTE ${tableName}`);
       return rows;
     }
     const scan = options.scanQuery ? scanViaFunction(ctx, options.scanQuery) : undefined;
-    if (scan) return collectPages(scan, { tableName, index }, options);
+    if (scan) return collectPages(scan, { tableName, index }, options, Boolean(state.disk));
     if (ctx.db) {
       const rows = await scanViaDb(ctx, tableName, index);
-      assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${tableName}`);
+      if (!state.disk) assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${tableName}`);
       return rows;
     }
     throw new Error(
@@ -274,7 +287,12 @@ export class PlanExecutor {
     state: ExecutionState,
   ): Promise<Row[]> {
     if (!this.planner) throw new Error("Subquery execution requires a SQL planner.");
-    return this.executePlan(ctx, this.planner.plan(query), options, { ctes: state.ctes, outerRow });
+    return this.executePlan(ctx, this.planner.plan(query), options, { ctes: state.ctes, outerRow, disk: state.disk });
+  }
+
+  private async spillIfNeeded(rows: Row[], state: ExecutionState, label: string): Promise<Row[]> {
+    if (!state.disk) return rows;
+    return state.disk.roundTrip(rows, label);
   }
 }
 
@@ -321,7 +339,12 @@ function scanViaFunction(ctx: ConvexLikeContext, scanQuery: unknown): PageFetche
   return (args) => ctx.runQuery!(scanQuery, args);
 }
 
-async function collectPages(scan: PageFetcher, args: ScanArgs, options: ExecuteOptions): Promise<Record<string, unknown>[]> {
+async function collectPages(
+  scan: PageFetcher,
+  args: ScanArgs,
+  options: ExecuteOptions,
+  usingDisk: boolean,
+): Promise<Record<string, unknown>[]> {
   const rows: Record<string, unknown>[] = [];
   let cursor: string | null | undefined = args.cursor ?? null;
   const pageSize = options.pageSize ?? 256;
@@ -330,11 +353,11 @@ async function collectPages(scan: PageFetcher, args: ScanArgs, options: ExecuteO
     const result = await scan({ ...args, cursor, numItems: pageSize });
     if (Array.isArray(result)) {
       rows.push(...result);
-      assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${args.tableName}`);
+      if (!usingDisk) assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${args.tableName}`);
       return rows;
     }
     rows.push(...result.page);
-    assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${args.tableName}`);
+    if (!usingDisk) assertRowBudget(rows.length, options.maxRowsRead, DEFAULT_MAX_ROWS_READ, `scan of ${args.tableName}`);
     if (result.isDone || !result.continueCursor) return rows;
     cursor = result.continueCursor;
   }
@@ -370,4 +393,63 @@ function assertRowBudget(
       `${operation} buffered ${count} rows, exceeding the configured limit of ${limit}. Add a selective predicate/index, lower page size, increase maxRowsBuffered/maxRowsRead, or run a future node spill executor for this plan.`,
     );
   }
+}
+
+class DiskStore {
+  private counter = 0;
+
+  private constructor(
+    private readonly dir: string,
+    private readonly fs: {
+      mkdir(path: string, options?: { recursive?: boolean }): Promise<unknown>;
+      rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<unknown>;
+      writeFile(path: string, data: string, encoding: string): Promise<unknown>;
+      readFile(path: string, encoding: string): Promise<string>;
+    },
+    private readonly path: {
+      join(...parts: string[]): string;
+    },
+  ) {}
+
+  static async create(): Promise<DiskStore> {
+    try {
+      const dynamicImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<any>;
+      const [fs, os, path] = await Promise.all([
+        dynamicImport("node:fs/promises"),
+        dynamicImport("node:os"),
+        dynamicImport("node:path"),
+      ]);
+      const dir = path.join(os.tmpdir(), `convex-olap-${randomId()}`);
+      const store = new DiskStore(dir, fs, path);
+      await store.fs.mkdir(dir, { recursive: true });
+      return store;
+    } catch (error) {
+      throw new Error(
+        `This query plan requires disk-backed execution for full-scan operators, so it must run in a Convex Node action. ${String(
+          error instanceof Error ? error.message : error,
+        )}`,
+      );
+    }
+  }
+
+  async roundTrip(rows: Row[], label: string): Promise<Row[]> {
+    const filePath = this.path.join(this.dir, `${this.counter++}-${sanitizeLabel(label)}.jsonl`);
+    await this.fs.writeFile(filePath, rows.map((row) => JSON.stringify(row)).join("\n"), "utf8");
+    const contents = await this.fs.readFile(filePath, "utf8");
+    if (contents.length === 0) return [];
+    return contents.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Row);
+  }
+
+  async cleanup(): Promise<void> {
+    await this.fs.rm(this.dir, { recursive: true, force: true });
+  }
+}
+
+function sanitizeLabel(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "rows";
+}
+
+function randomId(): string {
+  const maybeCrypto = globalThis.crypto as { randomUUID?: () => string } | undefined;
+  return maybeCrypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }

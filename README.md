@@ -62,17 +62,29 @@ Execution is intentionally simple:
    project, sort, and limit nodes.
 3. Annotate scans with usable equality-prefix indexes from the supplied schema.
 4. Collect rows from Convex through a query context or an action scan query.
-5. Evaluate the remaining relational operators in memory.
+5. Evaluate the remaining relational operators directly, or spill full-scan
+   operators to disk when the plan requires it.
 
-## Memory limits and large plans
+## Disk spill, Node actions, and large plans
 
-The default executor is in-memory. It does **not** spill unindexed joins, large
-sorts, or large aggregations to the filesystem. This keeps the package safe to
-import from normal Convex queries/actions, but it also means large OLAP plans must
-be bounded.
+Some plans cannot be reduced incrementally from Convex indexes: unindexed joins,
+sorts that do not line up with an index, `UNION`, derived-table subqueries, and
+some grouped aggregations. The planner marks these plans with:
 
-To avoid silently running an action out of memory, the executor enforces row
-budgets:
+```ts
+const plan = convexSQL.plan(sql);
+console.log(plan.storage.requiresDisk);
+console.log(plan.storage.reasons);
+```
+
+If `plan.storage.requiresDisk` is `true`, execution must happen from a Convex
+Node action. In that runtime, `convex-olap` automatically writes intermediate
+operator rows to temporary JSONL files and reads them back as the plan advances.
+In a normal Convex query/action runtime, the same plan throws with a message that
+it requires a Node action.
+
+Plans that do not require disk still enforce row budgets to avoid silently
+running a query/action out of memory:
 
 ```ts
 const convexSQL = new SQL(schema, {
@@ -84,14 +96,10 @@ const convexSQL = new SQL(schema, {
 ```
 
 - `maxRowsRead` limits rows collected from one table scan or CTE.
-- `maxRowsBuffered` limits rows buffered by in-memory operators such as joins,
-  grouping, projection, `UNION`, and `ORDER BY`.
+- `maxRowsBuffered` limits rows buffered by non-spilling operators.
 
-If a plan exceeds these limits, execution throws with the operator that exceeded
-the budget. Add a more selective predicate, add/use an index, split the report
-into smaller queries, or run the query in a future node-specific spill executor.
 Planner `pushdown` metadata helps you see which joins, groupings, and sorts line
-up with Convex indexes.
+up with Convex indexes and therefore may avoid disk spill.
 
 ## Pass your Convex schema
 
@@ -293,6 +301,7 @@ A `QueryPlan` contains:
   - `singleQuery`: simple single-table plans
   - `actionLoop`: plans expected to page through data from an action
   - `inMemory`: more complex plans evaluated by the in-memory executor
+- `storage`: whether the plan requires Node-action disk spill, plus reasons
 - `warnings`: non-fatal planner warnings, such as missing schema metadata
 
 The current executor evaluates joins, grouping, sorting, and projection in
@@ -502,7 +511,6 @@ Unsupported features include:
   information is inspectable planner metadata
 - streaming output from the executor; current execution collects pages before
   evaluating relational operators
-- filesystem-backed spill execution for large joins, aggregations, or sorts
 - writing result files or persistent materialized views
 
 ## Testing in this repo
