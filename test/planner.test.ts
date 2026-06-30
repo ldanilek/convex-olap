@@ -1,3 +1,5 @@
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
 import { describe, expect, test } from "vitest";
 import { SQL } from "../src/index.js";
 
@@ -26,6 +28,14 @@ const schema = {
   },
 };
 
+const convexSchema = defineSchema({
+  users: defineTable({
+    email: v.string(),
+    status: v.string(),
+    age: v.number(),
+  }).index("by_status_email", ["status", "email"]),
+});
+
 describe("SQL planner", () => {
   test("selects longest equality-prefix index from schema metadata", () => {
     const sql = new SQL(schema);
@@ -41,6 +51,22 @@ describe("SQL planner", () => {
       equalities: { status: "active", email: "a@example.com" },
     });
     expect(plan.executionMode).toBe("singleQuery");
+  });
+
+  test("accepts Convex defineSchema exports directly", () => {
+    const sql = new SQL(convexSchema);
+    const plan = sql.plan(`
+      SELECT email
+      FROM users
+      WHERE status = 'active' AND email = 'a@example.com'
+    `);
+
+    expect(plan.tables[0]?.index).toEqual({
+      name: "by_status_email",
+      fields: ["status", "email"],
+      equalities: { status: "active", email: "a@example.com" },
+    });
+    expect(sql.plan("SELECT age FROM users").warnings).toEqual([]);
   });
 
   test("plans joins and aggregates as action loop work", () => {

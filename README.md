@@ -9,15 +9,9 @@ from Convex actions, reports, exports, backfills, and ad-hoc internal tooling.
 
 ```ts
 import { SQL } from "convex-olap";
+import schema from "./convex/schema";
 
-const convexSQL = new SQL({
-  tables: {
-    users: {
-      columns: { email: "string", status: "string" },
-      indexes: { by_status: ["status"] },
-    },
-  },
-});
+const convexSQL = new SQL(schema);
 
 const results = await convexSQL(
   ctx,
@@ -73,45 +67,51 @@ Execution is intentionally simple:
    adapter.
 5. Evaluate the remaining relational operators in memory.
 
-## Schema metadata
+## Pass your Convex schema
 
-The runtime accepts lightweight schema metadata. It does not need Convex's full
-generated data model.
+The main constructor expects the same schema object you export from
+`convex/schema.ts`.
 
 ```ts
-const schemaMetadata = {
-  tables: {
-    users: {
-      columns: {
-        email: "string",
-        status: "string",
-        age: "number",
-      },
-      indexes: {
-        by_status: ["status"],
-        by_status_email: ["status", "email"],
-      },
-    },
-    orders: {
-      columns: {
-        userEmail: "string",
-        total: "number",
-      },
-      indexes: {
-        by_userEmail: ["userEmail"],
-      },
-    },
-  },
-};
+// convex/schema.ts
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+export default defineSchema({
+  users: defineTable({
+    email: v.string(),
+    status: v.string(),
+    age: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_status_email", ["status", "email"]),
+  orders: defineTable({
+    userEmail: v.string(),
+    total: v.number(),
+  }).index("by_userEmail", ["userEmail"]),
+});
 ```
 
-Index fields are ordered. For `["status", "email"]`, the planner can use:
+```ts
+import { SQL } from "convex-olap";
+import schema from "./schema";
+
+const convexSQL = new SQL(schema);
+```
+
+`convex-olap` reads table names, validators, and indexes from Convex's
+`defineSchema` / `defineTable` objects. Index fields are ordered. For
+`["status", "email"]`, the planner can use:
 
 - `status = 'active'`
 - `status = 'active' AND email = 'a@example.com'`
 
 It cannot use `email = 'a@example.com'` alone for that index because that skips
 the index prefix.
+
+For unit tests or standalone scripts, you can also pass a lightweight structural
+schema object with `{ tables: { ... } }`, but Convex apps should pass the actual
+schema export.
 
 ## Usage examples
 
@@ -124,9 +124,9 @@ Convex query functions have `ctx.db`, so `convex-olap` can scan directly.
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { SQL } from "convex-olap";
-import { schemaMetadata } from "./schemaMetadata";
+import schema from "./schema";
 
-const convexSQL = new SQL(schemaMetadata);
+const convexSQL = new SQL(schema);
 
 export const gmailUsers = query({
   args: {},
@@ -178,9 +178,9 @@ Then pass that query reference to `SQL`.
 import { action } from "./_generated/server";
 import { api } from "./_generated/api";
 import { SQL } from "convex-olap";
-import { schemaMetadata } from "./schemaMetadata";
+import schema from "./schema";
 
-const convexSQL = new SQL(schemaMetadata, {
+const convexSQL = new SQL(schema, {
   scanQuery: api.olap.scan,
   pageSize: 256,
 });
@@ -224,6 +224,7 @@ Adapters are useful for unit tests, fixtures, and non-Convex scripts.
 
 ```ts
 import { SQL, type ScanAdapter } from "convex-olap";
+import schema from "../convex/schema";
 
 const data = {
   users: [
@@ -242,7 +243,7 @@ const scan: ScanAdapter = async ({ tableName, index }) => {
   );
 };
 
-const convexSQL = new SQL(schemaMetadata, { scan });
+const convexSQL = new SQL(schema, { scan });
 const rows = await convexSQL({}, "SELECT COUNT(*) AS count FROM users");
 ```
 
@@ -306,9 +307,9 @@ import { action } from "./_generated/server";
 import { api } from "./_generated/api";
 import { SQL } from "convex-olap";
 import { materializePlanToFile } from "convex-olap/node";
-import { schemaMetadata } from "./schemaMetadata";
+import schema from "./schema";
 
-const convexSQL = new SQL(schemaMetadata);
+const convexSQL = new SQL(schema);
 
 export const exportActiveUsers = action({
   args: {},

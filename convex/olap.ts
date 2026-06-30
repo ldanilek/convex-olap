@@ -1,30 +1,7 @@
 import { actionGeneric, makeFunctionReference, mutationGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
 import { SQL, scanHandler } from "../src/index";
-
-const schemaMetadata = {
-  tables: {
-    users: {
-      columns: {
-        email: "string",
-        status: "string",
-        age: "number",
-      },
-      indexes: {
-        by_status: ["status"],
-      },
-    },
-    orders: {
-      columns: {
-        userEmail: "string",
-        total: "number",
-      },
-      indexes: {
-        by_userEmail: ["userEmail"],
-      },
-    },
-  },
-};
+import schema from "./schema";
 
 export const seed = mutationGeneric({
   args: {},
@@ -65,7 +42,7 @@ export const runInQuery = queryGeneric({
     source: v.string(),
   },
   handler: async (ctx, args) => {
-    const sql = new SQL(schemaMetadata);
+    const sql = new SQL(schema);
     return sql(ctx as any, args.source);
   },
 });
@@ -75,7 +52,7 @@ export const runInAction = actionGeneric({
     source: v.string(),
   },
   handler: async (ctx, args) => {
-    const sql = new SQL(schemaMetadata, {
+    const sql = new SQL(schema, {
       scanQuery: makeFunctionReference<"query">("olap:scan"),
       pageSize: 2,
     });

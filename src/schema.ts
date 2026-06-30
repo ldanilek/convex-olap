@@ -1,14 +1,21 @@
+import type { GenericSchema, SchemaDefinition } from "convex/server";
+
 export type ColumnSpec =
   | string
   | {
       type?: string;
       optional?: boolean;
-    };
+    }
+  | ConvexValidatorLike;
 
 export type IndexSpec =
   | string[]
   | {
       name: string;
+      fields: string[];
+    }
+  | {
+      indexDescriptor: string;
       fields: string[];
     };
 
@@ -16,9 +23,14 @@ export type TableSpec = {
   columns?: Record<string, ColumnSpec>;
   fields?: Record<string, ColumnSpec>;
   indexes?: Record<string, string[]> | IndexSpec[];
+  stagedDbIndexes?: IndexSpec[];
+  validator?: {
+    fields?: Record<string, ConvexValidatorLike>;
+  };
 };
 
 export type SchemaSpec =
+  | SchemaDefinition<GenericSchema, boolean>
   | {
       tables?: Record<string, TableSpec>;
     }
@@ -48,20 +60,38 @@ export function normalizeSchema(schema: SchemaSpec): NormalizedSchema {
     if (!isTableSpec(table)) continue;
     tables[name] = {
       name,
-      columns: table.columns ?? table.fields ?? {},
-      indexes: normalizeIndexes(table.indexes),
+      columns: table.columns ?? table.fields ?? table.validator?.fields ?? {},
+      indexes: normalizeIndexes(table.indexes, table.stagedDbIndexes),
     };
   }
 
   return { tables };
 }
 
-function normalizeIndexes(indexes: TableSpec["indexes"]): NormalizedIndex[] {
+type ConvexValidatorLike = {
+  kind?: string;
+  isOptional?: "required" | "optional";
+  isConvexValidator?: boolean;
+};
+
+function normalizeIndexes(
+  indexes: TableSpec["indexes"],
+  stagedDbIndexes: TableSpec["stagedDbIndexes"] = [],
+): NormalizedIndex[] {
+  if (!indexes && stagedDbIndexes.length === 0) return [];
+  const normalized = normalizeIndexCollection(indexes);
+  const staged = normalizeIndexCollection(stagedDbIndexes);
+  return [...normalized, ...staged];
+}
+
+function normalizeIndexCollection(indexes: TableSpec["indexes"]): NormalizedIndex[] {
   if (!indexes) return [];
   if (Array.isArray(indexes)) {
     return indexes.map((index, position) =>
       Array.isArray(index)
         ? { name: `by_${index.join("_") || position}`, fields: index }
+        : "indexDescriptor" in index
+          ? { name: index.indexDescriptor, fields: index.fields }
         : { name: index.name, fields: index.fields },
     );
   }
